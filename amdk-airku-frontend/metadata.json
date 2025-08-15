@@ -1,0 +1,8 @@
+{
+  "name": "Ku Airku - Distribution Management",
+  "description": "A comprehensive dashboard for managing sales, deliveries, and logistics for a water distribution company. It includes features for route planning, order management, and team monitoring for admins, sales, and drivers.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "prompt": ""
+}
