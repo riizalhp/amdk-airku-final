@@ -61,7 +61,7 @@ const DeliveryHistory: React.FC = () => {
     
     const stopsByStore = useMemo(() => {
         if (!selectedTrip) return {};
-        return selectedTrip.stops.reduce<Record<string, { storeName: string; address: string; orders: RouteStop[] }>>((acc, stop) => {
+        return selectedTrip.stops.reduce((acc: Record<string, { storeName: string; address: string; orders: RouteStop[] }>, stop) => {
             if (!acc[stop.storeId]) {
                 acc[stop.storeId] = { storeName: stop.storeName, address: stop.address, orders: [] };
             }

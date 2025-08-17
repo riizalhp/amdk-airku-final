@@ -138,7 +138,7 @@ const ProductSalesReport: React.FC = () => {
     
     const productSales = useMemo(() => {
         const filtered = orders.filter(o => o.status === OrderStatus.DELIVERED && (!startDate || o.orderDate >= startDate) && (!endDate || o.orderDate <= endDate));
-        const sales = filtered.flatMap(o => o.items).reduce<Record<string, { quantity: number; totalValue: number }>>((acc, item) => {
+        const sales = filtered.flatMap(o => o.items).reduce((acc: Record<string, { quantity: number; totalValue: number }>, item) => {
             const product = products.find(p => p.id === item.productId);
             if (!product) return acc;
             const price = item.specialPrice ?? item.originalPrice;
@@ -178,7 +178,7 @@ const RegionSalesReport: React.FC = () => {
 
     const salesByRegion = useMemo(() => {
         const filtered = orders.filter(o => o.status === OrderStatus.DELIVERED && (!startDate || o.orderDate >= startDate) && (!endDate || o.orderDate <= endDate));
-        const sales = filtered.reduce<Record<string, { totalValue: number; orderCount: number; }>>((acc, order) => {
+        const sales = filtered.reduce((acc: Record<string, { totalValue: number; orderCount: number; }>, order) => {
             const store = stores.find(s => s.id === order.storeId);
             if (!store) return acc;
             if (!acc[store.region]) acc[store.region] = { totalValue: 0, orderCount: 0 };

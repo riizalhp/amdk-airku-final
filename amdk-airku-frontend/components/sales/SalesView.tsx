@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppContext } from '../../hooks/useAppContext';
 import { ICONS } from '../../constants';
 import { Card } from '../ui/Card';
-import RouteMap from '../ui/RouteMap'; // Import RouteMap component
+import { RouteMap } from '../ui/RouteMap'; // Import RouteMap component
 import { Store, Product, Visit, VisitStatus, SalesVisitRoutePlan, SalesVisitStop, SurveyResponse, SoughtProduct, CompetitorPrice, CompetitorVolume } from '../../types';
 import { Modal } from '../ui/Modal';
 import { DataView } from './DataView';
@@ -118,7 +118,18 @@ const VisitSchedule: React.FC = () => {
     
         <Modal title="Peta Rute Kunjungan" isOpen={isMapModalOpen} onClose={() => setMapModalOpen(false)} size="full">
             <div style={{ height: '85vh', width: '100%' }}>
-                <RouteMap routes={transformedMapRoute} />
+                <RouteMap 
+                    stops={transformedMapRoute.flatMap(route => route.stops.map(stop => ({
+                        id: stop.visitId,
+                        orderId: stop.visitId,
+                        storeId: stop.storeId,
+                        storeName: stop.storeName,
+                        address: stop.address,
+                        location: stop.location,
+                        sequence: stop.sequence
+                    })))} 
+                    depot={{ lat: -7.8664161, lng: 110.1486773 }} 
+                />
             </div>
         </Modal>
 

@@ -1,5 +1,4 @@
 
-
 const pool = require('../config/db');
 const { randomUUID } = require('crypto');
 
@@ -18,9 +17,9 @@ const createPlan = async (plan) => {
       await connection.query(routePlanQuery, [planId, driverId, vehicleId, date, region]);
       
       if (stops && stops.length > 0) {
-        // Prepare bulk insert for route_stops table
+        // Prepare bulk insert for route_stops table, now including lat/lng
         const routeStopsQuery = `
-          INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, status, sequence)
+          INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, lat, lng, status, sequence)
           VALUES ?`;
         const routeStopsData = stops.map((stop, index) => [
           randomUUID(),
@@ -29,6 +28,8 @@ const createPlan = async (plan) => {
           stop.storeId,
           stop.storeName,
           stop.address,
+          stop.location.lat,
+          stop.location.lng,
           'Pending', // Default status for a new stop
           index + 1  // Sequence number
         ]);
@@ -158,7 +159,7 @@ const getAll = async (filters = {}) => {
       
       const stopsByPlanId = stops.reduce((acc, stop) => {
           if (!acc[stop.routePlanId]) acc[stop.routePlanId] = [];
-          const { routePlanId, sequence, lat, lng, ...restOfStop } = stop;
+          const { routePlanId, lat, lng, ...restOfStop } = stop;
           acc[stop.routePlanId].push({ 
               ...restOfStop,
               location: { lat, lng }
@@ -191,7 +192,7 @@ const getById = async (id) => {
       return {
           ...restOfPlan,
           stops: stops.map(stop => {
-              const { routePlanId, sequence, lat, lng, ...restOfStop } = stop;
+              const { routePlanId, lat, lng, ...restOfStop } = stop;
               return { 
                   ...restOfStop,
                   location: { lat, lng }
@@ -236,20 +237,23 @@ const updateStopStatus = async (stopId, data, user) => {
                 await connection.query('UPDATE products SET stock = stock - ?, reservedStock = GREATEST(0, reservedStock - ?) WHERE id = ?', [item.quantity, item.quantity, item.productId]);
             }
         } else if (data.status === 'Failed') {
+            // 1. Mark the stop as 'Failed' for historical record.
+            await connection.query(
+                'UPDATE route_stops SET status = ?, proofOfDeliveryImage = ?, failureReason = ? WHERE id = ?',
+                ['Failed', data.proofOfDeliveryImage || null, data.failureReason, stopId]
+            );
+
+            // 2. Reset the order to be re-planned for the next day.
             const tomorrow = new Date();
             tomorrow.setDate(tomorrow.getDate() + 1);
             const tomorrowStr = tomorrow.toISOString().split('T')[0];
             
-            // Re-queue order: Set to Pending, high priority for tomorrow, unassign vehicle for flexible replanning
+            // Explicitly set status to 'Pending', update date, and set priority.
+            // The assignedVehicleId is intentionally NOT updated to keep it with the same fleet.
             await connection.query(
-                'UPDATE orders SET status = ?, desiredDeliveryDate = ?, priority = ?, assignedVehicleId = NULL WHERE id = ?',
+                'UPDATE orders SET status = ?, desiredDeliveryDate = ?, priority = ? WHERE id = ?',
                 ['Pending', tomorrowStr, true, orderId]
             );
-
-            // CRITICAL FIX: Delete the failed stop to prevent unique constraint violations on re-planning.
-            // The failure reason submitted by the driver is not persisted, a necessary tradeoff
-            // to enable the automatic re-queuing feature without schema changes.
-            await connection.query('DELETE FROM route_stops WHERE id = ?', [stopId]);
         }
 
         await connection.commit();
@@ -292,11 +296,21 @@ const moveOrder = async (orderId, newVehicleId) => {
     await connection.beginTransaction();
 
     try {
-      const [orderRows] = await connection.query('SELECT storeId, desiredDeliveryDate, orderDate FROM orders WHERE id = ?', [orderId]);
+      const [orderRows] = await connection.query('SELECT storeId FROM orders WHERE id = ?', [orderId]);
       if (orderRows.length === 0) throw new Error('Pesanan tidak ditemukan.');
-      const { storeId, desiredDeliveryDate, orderDate } = orderRows[0];
-      const deliveryDate = desiredDeliveryDate || orderDate;
+      const { storeId } = orderRows[0];
 
+      // Determine the correct date context for the move operation.
+      // If the order is in a plan, use that plan's date. Otherwise, default to today.
+      const [currentStopRows] = await connection.query(`
+        SELECT rp.date 
+        FROM route_stops rs
+        JOIN route_plans rp ON rs.routePlanId = rp.id
+        WHERE rs.orderId = ?
+      `, [orderId]);
+
+      const planDate = currentStopRows.length > 0 ? currentStopRows[0].date : new Date().toISOString().split('T')[0];
+      
       // Hapus pesanan dari pemberhentian rute saat ini, jika ada
       await connection.query('DELETE FROM route_stops WHERE orderId = ?', [orderId]);
 
@@ -312,21 +326,21 @@ const moveOrder = async (orderId, newVehicleId) => {
             throw new Error(`Tidak dapat memindahkan pesanan. Toko berada di wilayah '${storeRows[0].region}' sedangkan armada di wilayah '${vehicleRows[0].region}'.`);
         }
 
-        // Periksa apakah sudah ada rencana rute untuk armada baru pada tanggal tersebut
-        const [newPlanRows] = await connection.query('SELECT id FROM route_plans WHERE vehicleId = ? AND date = ? ORDER BY id LIMIT 1', [newVehicleId, deliveryDate]);
+        // Periksa apakah sudah ada rencana rute untuk armada baru pada tanggal yang benar
+        const [newPlanRows] = await connection.query('SELECT id FROM route_plans WHERE vehicleId = ? AND date = ? ORDER BY id LIMIT 1', [newVehicleId, planDate]);
         
         if (newPlanRows.length > 0) {
             // Rencana ADA: Tambahkan pesanan sebagai pemberhentian baru ke rencana yang ada
             const newPlanId = newPlanRows[0].id;
-            const [storeDetails] = await connection.query(`SELECT name as storeName, address FROM stores WHERE id = ?`, [storeId]);
-            const { storeName, address } = storeDetails[0];
+            const [storeDetails] = await connection.query(`SELECT name as storeName, address, lat, lng FROM stores WHERE id = ?`, [storeId]);
+            const { storeName, address, lat, lng } = storeDetails[0];
 
             const [maxSeqRows] = await connection.query('SELECT MAX(sequence) as maxSeq FROM route_stops WHERE routePlanId = ?', [newPlanId]);
             const newSequence = (maxSeqRows[0].maxSeq || 0) + 1;
 
             const newStopId = randomUUID();
-            const stopInsertQuery = 'INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, status, sequence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-            await connection.query(stopInsertQuery, [newStopId, newPlanId, orderId, storeId, storeName, address, 'Pending', newSequence]);
+            const stopInsertQuery = 'INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, lat, lng, status, sequence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+            await connection.query(stopInsertQuery, [newStopId, newPlanId, orderId, storeId, storeName, address, lat, lng, 'Pending', newSequence]);
             
             // Perbarui status pesanan menjadi 'Routed'
             await connection.query(`UPDATE orders SET status = 'Routed', assignedVehicleId = ? WHERE id = ?`, [newVehicleId, orderId]);

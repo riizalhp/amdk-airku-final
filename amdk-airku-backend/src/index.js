@@ -19,6 +19,9 @@ const salesVisitRoutes = require('./routes/salesVisitRoutes');
 
 const app = express();
 
+// Disable ETag caching to ensure fresh data on every request
+app.disable('etag');
+
 // Middleware
 app.use(cors({
   origin: 'http://localhost:5173' // Ganti dengan origin frontend Anda jika berbeda

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card } from '../ui/Card';
-import RouteMap from '../ui/RouteMap';
+import { RouteMap } from '../ui/RouteMap';
 import { Role, RoutePlan, Vehicle, VehicleStatus, SalesVisitRoutePlan, User, RouteStop } from '../../types';
 import { ICONS } from '../../constants';
 import { Modal } from '../ui/Modal';
@@ -26,7 +26,7 @@ export const RoutePlanning: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalError, setModalError] = useState<string | null>(null);
     const [expandedRouteIds, setExpandedRouteIds] = useState<string[]>([]);
-    const [selectedMapRoute, setSelectedMapRoute] = useState<any | null>(null);
+    const [selectedMapRoute, setSelectedMapRoute] = useState<RouteStop[] | null>(null);
 
     // --- Data Fetching ---
     const { data: users = [] } = useQuery<User[]>({ queryKey: ['users'], queryFn: getUsers });
@@ -177,7 +177,10 @@ export const RoutePlanning: React.FC = () => {
                                         <div className="flex justify-between items-center">
                                             <h5 className="font-semibold">Perjalanan {index + 1} ({Object.keys(stopsByStore).length || route.stops.length} pemberhentian)</h5>
                                             <div className="flex items-center gap-3">
-                                                <button onClick={() => { const mapData = sortedDeliveryRoutesForMap.find(r => r.id === route.id); if (mapData) setSelectedMapRoute(mapData); }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
+                                                <button onClick={() => { 
+                                    const routeData = sortedDeliveryRoutesForMap.find(r => r.id === route.id); 
+                                    if (routeData) setSelectedMapRoute(routeData.stops); 
+                                }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
                                                 <button onClick={() => toggleRouteExpansion(route.id)} className="text-sm font-semibold text-gray-600 hover:underline">{isExpanded ? 'Sembunyikan' : 'Lihat Detail'}</button>
                                                 <button onClick={() => handleDeleteDeliveryTrip(route.id)} className="p-2 rounded-lg bg-red-100 text-red-700" title="Hapus/Batalkan Perjalanan"><ICONS.trash /></button>
                                             </div>
@@ -233,7 +236,10 @@ export const RoutePlanning: React.FC = () => {
                                                     <div className="flex justify-between items-center">
                                                         <h5 className="font-semibold">Daftar Kunjungan</h5>
                                                         <div className="flex items-center gap-3">
-                                                            <button onClick={() => { const mapData = sortedSalesRoutesForMap.find(r => r.id === route.id); if (mapData) setSelectedMapRoute(mapData); }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
+                                                            <button onClick={() => { 
+                                                                const routeData = sortedSalesRoutesForMap.find(r => r.id === route.id); 
+                                                                if (routeData) setSelectedMapRoute(routeData.stops); 
+                                                            }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
                                                             <button onClick={() => toggleRouteExpansion(route.id)} className="text-sm font-semibold text-gray-600 hover:underline">
                                                                 {isExpanded ? 'Sembunyikan' : 'Lihat Detail'}
                                                             </button>
@@ -296,7 +302,10 @@ export const RoutePlanning: React.FC = () => {
             {selectedMapRoute && (
                 <Modal title="Peta Rute" isOpen={!!selectedMapRoute} onClose={() => setSelectedMapRoute(null)} size="4xl">
                     <div style={{ height: '60vh', width: '100%' }}>
-                        <RouteMap key={selectedMapRoute.id} routes={[selectedMapRoute]} />
+                        <RouteMap 
+                            stops={selectedMapRoute} 
+                            depot={{ lat: -7.8664161, lng: 110.1486773 }} 
+                        />
                     </div>
                 </Modal>
             )}

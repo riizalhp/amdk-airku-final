@@ -1,3 +1,5 @@
+
+
 const Store = require('../models/storeModel');
 const { classifyStoreRegion } = require('../services/geminiService');
 
@@ -69,7 +71,7 @@ const deleteStore = async (req, res) => {
         
         const hasDependencies = await Store.checkDependencies(req.params.id);
         if (hasDependencies) {
-            return res.status(400).json({ message: 'Tidak dapat menghapus toko ini karena masih memiliki pesanan atau jadwal kunjungan yang terkait.' });
+            return res.status(400).json({ message: 'Tidak dapat menghapus toko ini karena masih memiliki pesanan, jadwal kunjungan, atau riwayat perjalanan yang terkait.' });
         }
 
         const success = await Store.delete(req.params.id);

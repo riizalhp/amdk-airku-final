@@ -41,6 +41,7 @@ const createSalesVisitPlan = async (req, res) => {
                 storeName: visitData.storeName,
                 address: visitData.address,
                 purpose: visitData.purpose,
+                location: visitData.location, // Add this line
             };
         });
 

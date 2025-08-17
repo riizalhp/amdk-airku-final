@@ -71,6 +71,7 @@ const SalesVisitRouteModel = {
                 storeName: stop.storeName,
                 address: stop.address,
                 purpose: stop.purpose,
+                sequence: stop.sequence, // <-- ADD THIS LINE
                 location: { lat: stop.lat, lng: stop.lng },
                 status: stop.status || 'Akan Datang', // Default status
                 notes: stop.notes,

@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppContext } from '../../hooks/useAppContext';
 import { ICONS } from '../../constants';
 import { Card } from '../ui/Card';
-import RouteMap from '../ui/RouteMap';
-import { RoutePlan, RouteStop } from '../../types';
+import { RouteMap } from '../ui/RouteMap';
+import { RoutePlan, RouteStop, Vehicle } from '../../types';
 import { Modal } from '../ui/Modal';
 import { getDeliveryRoutes, updateDeliveryStopStatus, startOrCompleteTrip } from '../../services/routeApiService';
 import { getVehicles } from '../../services/vehicleApiService';
@@ -234,7 +234,10 @@ export const DriverView: React.FC = () => {
 
             <Modal title="Peta Rute Hari Ini" isOpen={isMapModalOpen} onClose={() => setMapModalOpen(false)} size="full">
                 <div style={{ height: '85vh', width: '100%' }}>
-                    <RouteMap routes={todayRoutesSorted} />
+                    <RouteMap 
+                        stops={todayRoutesSorted.flatMap(route => route.stops)} 
+                        depot={{ lat: -7.8664161, lng: 110.1486773 }} 
+                    />
                 </div>
             </Modal>
 

@@ -1,5 +1,4 @@
 
-const pool = require('../config/db');
 const Vehicle = require('../models/vehicleModel');
 const User = require('../models/userModel');
 const Order = require('../models/orderModel');
@@ -13,29 +12,25 @@ const createPlan = async (req, res) => {
         return res.status(400).json({ message: "Harap pilih tanggal, armada, dan pengemudi." });
     }
 
-    const connection = await pool.getConnection();
-    await connection.beginTransaction();
-
     try {
-        const vehicle = await Vehicle.getById(vehicleId, connection);
-        const driver = await User.getById(driverId, connection);
+        const vehicle = await Vehicle.getById(vehicleId);
+        const driver = await User.getById(driverId);
         
         if (!vehicle || !driver) {
-            await connection.rollback();
-            connection.release();
             return res.status(404).json({ message: "Armada atau pengemudi tidak valid." });
         }
         
-        await Route.deletePendingPlansForVehicle(vehicleId, deliveryDate, connection);
+        // Hapus semua rencana yang belum dimulai untuk armada & tanggal ini sebelum membuat yang baru.
+        // Ini memungkinkan perencanaan ulang yang aman di tengah hari.
+        await Route.deletePendingPlansForVehicle(vehicleId, deliveryDate);
         
-        const routableOrders = await Order.getAssignedByVehicleId(vehicleId, connection);
+        const routableOrders = await Order.findRoutableOrders({ deliveryDate, vehicleRegion: vehicle.region, vehicleId });
 
         if (routableOrders.length === 0) {
-            await connection.commit();
-            connection.release();
-            return res.status(200).json({ success: true, message: "Tidak ada pesanan 'Pending' yang dapat dijadwalkan untuk armada ini." });
+            return res.status(404).json({ message: "Tidak ada pesanan 'Pending' yang tersisa untuk dijadwalkan ulang hari ini." });
         }
 
+        // 1. Group orders by store to treat multiple orders to the same store as a single stop for routing
         const storeStops = routableOrders.reduce((acc, order) => {
             if (!acc[order.storeId]) {
                 acc[order.storeId] = {
@@ -50,20 +45,29 @@ const createPlan = async (req, res) => {
             }
             acc[order.storeId].totalDemand += order.demand;
             acc[order.storeId].orderIds.push(order.id);
-            if (order.priority) acc[order.storeId].priority = true;
+            if (order.priority) {
+                acc[order.storeId].priority = true;
+            }
             return acc;
         }, {});
 
-        const nodes = Object.values(storeStops).map(store => ({ id: store.storeId, location: store.location, demand: store.totalDemand, priority: store.priority }));
-        const depotLocation = { lat: -7.8664161, lng: 110.1486773 };
+        // 2. Create nodes for the routing algorithm from the grouped stores
+        const nodes = Object.values(storeStops).map(store => ({
+            id: store.storeId, // The routing algorithm uses the storeId as the unique node identifier
+            location: store.location,
+            demand: store.totalDemand,
+            priority: store.priority,
+        }));
+        
+        const depotLocation = { lat: -7.8664161, lng: 110.1486773 }; // PDAM Tirta Binangun
+        // The algorithm now returns trips of storeIds, not orderIds
         const calculatedTrips = calculateSavingsMatrixRoutes(nodes, depotLocation, vehicle.capacity);
 
         if (calculatedTrips.length === 0 && nodes.length > 0) {
-            await connection.rollback();
-            connection.release();
-            return res.status(500).json({ message: "Gagal menghasilkan rute. Pastikan ada pesanan yang valid." });
+             return res.status(500).json({ message: "Gagal menghasilkan rute. Pastikan ada pesanan yang valid." });
         }
         
+        // --- Prioritization Logic ---
         const priorityStoreIds = new Set(nodes.filter(n => n.priority).map(n => n.id));
         const sortedTrips = calculatedTrips.sort((tripA, tripB) => {
             const hasPriorityA = tripA.some(storeId => priorityStoreIds.has(storeId));
@@ -78,32 +82,57 @@ const createPlan = async (req, res) => {
 
         for (const tripStoreIds of sortedTrips) {
             const stopsForThisTrip = [];
+            // Iterate through storeIds in the optimized trip sequence
             for (const storeId of tripStoreIds) {
-                const ordersForThisStore = routableOrders.filter(o => o.storeId === storeId);
+                const storeData = storeStops[storeId];
+                // Find all original orders associated with this store stop
+                const ordersForThisStore = routableOrders.filter(o => storeData.orderIds.includes(o.id));
+                
                 ordersForThisStore.forEach(order => {
-                    stopsForThisTrip.push({ orderId: order.id, storeId: order.storeId, storeName: order.storeName, address: order.address });
+                    stopsForThisTrip.push({
+                        orderId: order.id,
+                        storeId: order.storeId,
+                        storeName: order.storeName,
+                        address: order.address,
+                        location: order.location
+                    });
                 });
             }
 
+
             if (stopsForThisTrip.length > 0) {
                 totalRoutedOrders += stopsForThisTrip.length;
-                const newRoutePlan = { driverId, vehicleId, date: deliveryDate, stops: stopsForThisTrip, region: vehicle.region };
-                const createdRoute = await Route.createPlan(newRoutePlan, connection);
+                const newRoutePlan = {
+                    driverId,
+                    vehicleId,
+                    date: deliveryDate,
+                    stops: stopsForThisTrip,
+                    region: vehicle.region
+                };
+                const createdRoute = await Route.createPlan(newRoutePlan);
                 newRoutes.push(createdRoute);
             }
         }
         
-        let message = `Berhasil membuat ${newRoutes.length} perjalanan baru untuk ${driver.name}, menjadwalkan ${totalRoutedOrders} pesanan.`;
+        const oversizedTrips = sortedTrips.filter(trip => {
+            const tripLoad = trip.reduce((sum, storeId) => {
+                const node = nodes.find(n => n.id === storeId);
+                return sum + (node ? node.demand : 0);
+            }, 0);
+            return tripLoad > vehicle.capacity;
+        });
 
-        await connection.commit();
+        let message = `Berhasil membuat ${newRoutes.length} perjalanan baru untuk ${driver.name}, menjadwalkan ${totalRoutedOrders} pesanan.`;
+        if (oversizedTrips.length > 0) {
+             message += ` PERINGATAN: ${oversizedTrips.length} perjalanan melebihi kapasitas. Silakan periksa di menu Pantau Muatan.`;
+        }
+
+
         res.status(201).json({ success: true, message, routes: newRoutes });
         
     } catch (error) {
-        await connection.rollback();
         console.error('Error creating route plan:', error);
         res.status(500).json({ message: 'Terjadi kesalahan pada server saat membuat rencana rute.' });
-    } finally {
-        if (connection) connection.release();
     }
 };
 
