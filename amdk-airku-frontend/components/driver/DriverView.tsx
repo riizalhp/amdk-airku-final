@@ -3,18 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppContext } from '../../hooks/useAppContext';
 import { ICONS } from '../../constants';
 import { Card } from '../ui/Card';
-import { RoutePlan, RouteStop, User, Vehicle, VehicleStatus } from '../../types';
+import RouteMap from '../ui/RouteMap';
+import { RoutePlan, RouteStop } from '../../types';
 import { Modal } from '../ui/Modal';
-import { RouteMap } from '../ui/RouteMap';
 import { getDeliveryRoutes, updateDeliveryStopStatus, startOrCompleteTrip } from '../../services/routeApiService';
 import { getVehicles } from '../../services/vehicleApiService';
 
-// Custom hook to get the previous value of a prop or state
 function usePrevious<T>(value: T): T | undefined {
     const ref = useRef<T | undefined>(undefined);
-    useEffect(() => {
-        ref.current = value;
-    });
+    useEffect(() => { ref.current = value; });
     return ref.current;
 }
 
@@ -25,87 +22,55 @@ export const DriverView: React.FC = () => {
     const queryClient = useQueryClient();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // -- Data Fetching --
     const { data: allRoutes = [], isLoading: isLoadingRoutes } = useQuery<RoutePlan[]>({
         queryKey: ['deliveryRoutes', { driverId: currentUser?.id, date: new Date().toISOString().split('T')[0] }],
         queryFn: () => getDeliveryRoutes({ driverId: currentUser?.id, date: new Date().toISOString().split('T')[0] }),
         enabled: !!currentUser,
     });
-    const { data: vehicles = [], isLoading: isLoadingVehicles } = useQuery<Vehicle[]>({ 
-        queryKey: ['vehicles'], 
-        queryFn: getVehicles 
-    });
+    const { data: vehicles = [], isLoading: isLoadingVehicles } = useQuery<Vehicle[]>({ queryKey: ['vehicles'], queryFn: getVehicles });
 
-    // -- Core UI State --
     const [activeView, setActiveView] = useState<DriverActiveView>('current');
     const [activeTripIndex, setActiveTripIndex] = useState(0);
     const [showInterstitial, setShowInterstitial] = useState(false);
+    const [isMapModalOpen, setMapModalOpen] = useState(false);
 
-    // -- Mutations for Backend Actions --
-    const startTripMutation = useMutation({
-        mutationFn: (vehicleId: string) => startOrCompleteTrip(vehicleId, 'start'),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
-        onError: (err: any) => alert(err.response?.data?.message || 'Gagal memulai perjalanan.'),
-    });
+    const startTripMutation = useMutation({ mutationFn: (vehicleId: string) => startOrCompleteTrip(vehicleId, 'start'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vehicles'] }), onError: (err: any) => alert(err.response?.data?.message || 'Gagal memulai perjalanan.') });
+    const completeTripMutation = useMutation({ mutationFn: (vehicleId: string) => startOrCompleteTrip(vehicleId, 'complete'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vehicles'] }), onError: (err: any) => alert(err.response?.data?.message || 'Gagal menyelesaikan perjalanan.') });
+    const updateStopMutation = useMutation({ mutationFn: updateDeliveryStopStatus, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['deliveryRoutes'] }); queryClient.invalidateQueries({ queryKey: ['orders'] }); resetConfirmationState(); }, onError: (err: any) => alert(err.response?.data?.message || 'Gagal memperbarui status.') });
 
-    const completeTripMutation = useMutation({
-        mutationFn: (vehicleId: string) => startOrCompleteTrip(vehicleId, 'complete'),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
-        onError: (err: any) => alert(err.response?.data?.message || 'Gagal menyelesaikan perjalanan.'),
-    });
-
-    const updateStopMutation = useMutation({
-        mutationFn: updateDeliveryStopStatus,
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['deliveryRoutes'] });
-            queryClient.invalidateQueries({ queryKey: ['orders'] });
-            resetConfirmationState();
-        },
-        onError: (err: any) => alert(err.response?.data?.message || 'Gagal memperbarui status.'),
-    });
-
-    // -- Derived State from Data (Memos) --
     const todayRoutes = useMemo(() => allRoutes.sort((a, b) => a.id.localeCompare(b.id)), [allRoutes]);
     const vehicleForTodaysRoute = useMemo(() => todayRoutes.length > 0 && vehicles.length > 0 ? vehicles.find(v => v.id === todayRoutes[0].vehicleId) : null, [todayRoutes, vehicles]);
-    const isStarted = useMemo(() => vehicleForTodaysRoute?.status === VehicleStatus.DELIVERING, [vehicleForTodaysRoute]);
+    const isStarted = useMemo(() => vehicleForTodaysRoute?.status === 'Sedang Mengirim', [vehicleForTodaysRoute]);
     const activeTrip = useMemo(() => isStarted ? todayRoutes[activeTripIndex] : null, [isStarted, todayRoutes, activeTripIndex]);
     const areAllTripsCompleted = useMemo(() => todayRoutes.length > 0 && todayRoutes.every(r => r.stops.every(s => s.status !== 'Pending')), [todayRoutes]);
     const previousActiveTrip = usePrevious(activeTrip);
 
-    // -- Effects --
+    const todayRoutesSorted = useMemo(() => {
+        return todayRoutes.map(route => ({
+            ...route,
+            stops: [...route.stops].sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+        }));
+    }, [todayRoutes]);
+
     useEffect(() => {
         const currentTripIsDone = activeTrip?.stops.every(s => s.status !== 'Pending') ?? false;
         const previousTripWasNotDone = previousActiveTrip?.stops.some(s => s.status === 'Pending') ?? true;
         const hasMoreTrips = activeTripIndex < todayRoutes.length - 1;
-        if (currentTripIsDone && previousTripWasNotDone && hasMoreTrips) {
-            setShowInterstitial(true);
-        }
+        if (currentTripIsDone && previousTripWasNotDone && hasMoreTrips) setShowInterstitial(true);
     }, [activeTrip, previousActiveTrip, activeTripIndex, todayRoutes.length]);
     
     useEffect(() => {
-        if (areAllTripsCompleted && vehicleForTodaysRoute?.status === VehicleStatus.DELIVERING) {
-            completeTripMutation.mutate(vehicleForTodaysRoute.id);
-        }
+        if (areAllTripsCompleted && vehicleForTodaysRoute?.status === 'Sedang Mengirim') completeTripMutation.mutate(vehicleForTodaysRoute.id);
     }, [areAllTripsCompleted, vehicleForTodaysRoute, completeTripMutation]);
 
-    // -- Modal and Photo State --
     const [showProofModal, setShowProofModal] = useState(false);
     const [showFailModal, setShowFailModal] = useState(false);
     const [capturedImage, setCapturedImage] = useState<string | null>(null);
     const [stopBeingConfirmed, setStopBeingConfirmed] = useState<RouteStop | null>(null);
     const [failureReason, setFailureReason] = useState('');
-    const [showMap, setShowMap] = useState<RoutePlan | null>(null);
-    const depotLocation = { lat: -7.8664161, lng: 110.1486773 };
     
-    const resetConfirmationState = () => {
-        setShowProofModal(false);
-        setShowFailModal(false);
-        setCapturedImage(null);
-        setStopBeingConfirmed(null);
-        setFailureReason('');
-    };
+    const resetConfirmationState = () => { setShowProofModal(false); setShowFailModal(false); setCapturedImage(null); setStopBeingConfirmed(null); setFailureReason(''); };
     
-    // -- Event Handlers --
     const handleStartFirstTrip = () => { if (vehicleForTodaysRoute) startTripMutation.mutate(vehicleForTodaysRoute.id); };
     const handleProceedToNextTrip = () => { setActiveTripIndex(i => i + 1); setShowInterstitial(false); setActiveView('current'); };
     const handleAttemptSuccess = (stop: RouteStop) => { setStopBeingConfirmed(stop); fileInputRef.current?.click(); };
@@ -115,31 +80,19 @@ export const DriverView: React.FC = () => {
         const file = event.target.files?.[0];
         if (file) {
             const reader = new FileReader();
-            reader.onload = (e) => {
-                setCapturedImage(e.target?.result as string);
-                if (!showFailModal) setShowProofModal(true);
-            };
+            reader.onload = (e) => { setCapturedImage(e.target?.result as string); if (!showFailModal) setShowProofModal(true); };
             reader.readAsDataURL(file);
         }
          if (event.target) event.target.value = '';
     };
 
-    const handleConfirmDelivery = () => {
-        if (!stopBeingConfirmed || !capturedImage) return;
-        updateStopMutation.mutate({ stopId: stopBeingConfirmed.id, status: 'Completed', proofImage: capturedImage });
-    };
-
-    const handleConfirmFailure = () => {
-        if (!stopBeingConfirmed || !failureReason) return;
-        updateStopMutation.mutate({ stopId: stopBeingConfirmed.id, status: 'Failed', failureReason, proofImage: capturedImage || undefined });
-    };
+    const handleConfirmDelivery = () => { if (stopBeingConfirmed && capturedImage) updateStopMutation.mutate({ stopId: stopBeingConfirmed.id, status: 'Completed', proofImage: capturedImage }); };
+    const handleConfirmFailure = () => { if (stopBeingConfirmed && failureReason) updateStopMutation.mutate({ stopId: stopBeingConfirmed.id, status: 'Failed', failureReason, proofImage: capturedImage || undefined }); };
     
-    // -- Reusable View Components --
     const NoRoutesMessage = () => <div className="p-8 h-full flex items-center justify-center"><Card><p className="text-center text-gray-600">Tidak ada rute yang ditugaskan untuk Anda hari ini.</p></Card></div>;
     const AllTripsCompletedMessage = () => <div className="p-8 text-center h-full flex items-center justify-center"><Card><span className="text-green-500 inline-block"><ICONS.checkCircle width={48} height={48} /></span><h2 className="text-2xl font-bold text-green-600 mt-2">Semua Tugas Selesai!</h2><p>Kerja bagus, {currentUser?.name}!</p></Card></div>;
     const StartTripView = () => (<div className="p-8 h-full flex flex-col justify-center"><Card><h2 className="text-xl font-bold text-center mb-4">Ringkasan Tugas Hari Ini</h2><div className="space-y-2"><div className="flex justify-between p-3 bg-gray-50 rounded-lg"><span className="text-gray-600">Total Perjalanan:</span><span className="font-bold">{todayRoutes.length}</span></div><div className="flex justify-between p-3 bg-gray-50 rounded-lg"><span className="text-gray-600">Total Pemberhentian:</span><span className="font-bold">{todayRoutes.flatMap(r => r.stops).length}</span></div></div><button onClick={handleStartFirstTrip} disabled={startTripMutation.isPending} className="mt-8 w-full bg-brand-primary text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2"><ICONS.navigation /> {startTripMutation.isPending ? 'Memulai...' : 'Mulai Rute Saya'}</button></Card></div>);
 
-    // -- View-Specific Components --
     const CurrentTripView: React.FC = () => {
         if (showInterstitial) {
             const completed = todayRoutes[activeTripIndex].stops.filter(s => s.status === 'Completed').length;
@@ -152,9 +105,7 @@ export const DriverView: React.FC = () => {
         const stopsByStore = useMemo(() => {
             if (!activeTrip) return {};
             return activeTrip.stops.reduce<Record<string, StoreGroup>>((acc, stop) => {
-                if (!acc[stop.storeId]) {
-                    acc[stop.storeId] = { storeName: stop.storeName, address: stop.address, orders: [] };
-                }
+                if (!acc[stop.storeId]) acc[stop.storeId] = { storeName: stop.storeName, address: stop.address, orders: [] };
                 acc[stop.storeId].orders.push(stop);
                 return acc;
             }, {});
@@ -165,20 +116,10 @@ export const DriverView: React.FC = () => {
         
         return (
             <div className="p-4 space-y-4">
-                <Card className="p-4 bg-white shadow-lg">
-                    <div className="flex justify-between items-center">
-                        <h2 className="text-xl font-bold">Daftar Pemberhentian</h2>
-                        <button onClick={() => setShowMap(activeTrip)} className="text-sm text-brand-primary font-semibold hover:underline flex items-center gap-1">
-                            <ICONS.mapPin /> Lihat Peta
-                        </button>
-                    </div>
-                </Card>
-    
                 <div className="space-y-4">
                     {storeGroups.map((storeGroup, groupIndex) => {
                         const isCurrentStore = groupIndex === currentStoreGroupIndex;
                         const isGroupCompleted = storeGroup.orders.every(o => o.status !== 'Pending');
-    
                         return (
                             <Card key={storeGroup.storeName + groupIndex} className={`p-4 transition-all ${isCurrentStore ? 'border-2 border-brand-primary shadow-xl' : ''} ${isGroupCompleted ? 'opacity-60 bg-gray-50' : 'bg-white'}`}>
                                 <div className="flex items-start justify-between">
@@ -195,7 +136,6 @@ export const DriverView: React.FC = () => {
                                         <ICONS.navigation />
                                     </a>
                                 </div>
-                                
                                 <div className="mt-4 space-y-3 border-t pt-3">
                                     {storeGroup.orders.map(orderStop => {
                                         const isCompleted = orderStop.status === 'Completed';
@@ -209,22 +149,16 @@ export const DriverView: React.FC = () => {
                                                  {isCompleted && <span className="text-green-600"><ICONS.checkCircle /></span>}
                                                  {isFailed && <span className="text-red-600"><ICONS.xCircle /></span>}
                                             </div>
-
                                             {isCurrentStore && orderStop.status === 'Pending' && (
                                                 <div className="mt-3 grid grid-cols-2 gap-2">
-                                                    <button onClick={() => handleAttemptSuccess(orderStop)} disabled={updateStopMutation.isPending} className="bg-green-500 text-white text-sm font-bold py-2 rounded-lg flex items-center justify-center gap-1">
-                                                        <ICONS.checkCircle width={16} height={16} /> Berhasil
-                                                    </button>
-                                                    <button onClick={() => handleFailDelivery(orderStop)} disabled={updateStopMutation.isPending} className="bg-red-500 text-white text-sm font-bold py-2 rounded-lg flex items-center justify-center gap-1">
-                                                        <ICONS.xCircle width={16} height={16} /> Gagal
-                                                    </button>
+                                                    <button onClick={() => handleAttemptSuccess(orderStop)} disabled={updateStopMutation.isPending} className="bg-green-500 text-white text-sm font-bold py-2 rounded-lg flex items-center justify-center gap-1"><ICONS.checkCircle width={16} height={16} /> Berhasil</button>
+                                                    <button onClick={() => handleFailDelivery(orderStop)} disabled={updateStopMutation.isPending} className="bg-red-500 text-white text-sm font-bold py-2 rounded-lg flex items-center justify-center gap-1"><ICONS.xCircle width={16} height={16} /> Gagal</button>
                                                 </div>
                                             )}
                                         </div>
                                         );
                                     })}
                                 </div>
-
                             </Card>
                         );
                     })}
@@ -235,7 +169,8 @@ export const DriverView: React.FC = () => {
 
     const RouteListView: React.FC = () => {
         if(todayRoutes.length === 0) return <NoRoutesMessage />;
-        return (<div className="p-4 space-y-4">{todayRoutes.map((route, index) => {
+        return (<div className="p-4 space-y-4">
+            {todayRoutes.map((route, index) => {
             const isCurrent = isStarted && index === activeTripIndex && !showInterstitial;
             const isCompleted = route.stops.every(s => s.status !== 'Pending');
             const completedStops = route.stops.filter(s => s.status !== 'Pending').length;
@@ -250,28 +185,20 @@ export const DriverView: React.FC = () => {
         return (<div className="p-4"><Card><h2 className="text-xl font-bold mb-4 text-center">Ringkasan Hari Ini</h2><div className="w-full bg-gray-200 rounded-full h-2.5 mb-4"><div className="bg-brand-primary h-2.5 rounded-full" style={{ width: `${progress}%` }}></div></div><div className="grid grid-cols-2 gap-4 text-center"><div className="p-3 bg-blue-50 rounded-lg"><p className="text-2xl font-bold">{summaryData.total}</p><p className="text-sm">Total</p></div><div className="p-3 bg-gray-50 rounded-lg"><p className="text-2xl font-bold">{summaryData.pending}</p><p className="text-sm">Pending</p></div><div className="p-3 bg-green-50 rounded-lg"><p className="text-2xl font-bold text-green-600">{summaryData.completed}</p><p className="text-sm">Selesai</p></div><div className="p-3 bg-red-50 rounded-lg"><p className="text-2xl font-bold text-red-600">{summaryData.failed}</p><p className="text-sm">Gagal</p></div></div></Card></div>);
     };
 
-    // -- Main Content Renderer --
     const renderContent = () => {
         if (isLoadingRoutes || isLoadingVehicles) return <div className="p-8 text-center">Memuat data...</div>;
+        if (areAllTripsCompleted && todayRoutes.length > 0) return <AllTripsCompletedMessage />;
+        if (todayRoutes.length > 0 && !isStarted) return <StartTripView />;
+        if (todayRoutes.length === 0) return <NoRoutesMessage />;
 
         switch (activeView) {
-            case 'current':
-                // FIX: Check for completion first to avoid flashing the start screen.
-                if (areAllTripsCompleted && todayRoutes.length > 0) return <AllTripsCompletedMessage />;
-                if (todayRoutes.length > 0 && !isStarted) return <StartTripView />;
-                if (todayRoutes.length === 0) return <NoRoutesMessage />;
-                return <CurrentTripView />;
-            case 'routeList':
-                return <RouteListView />;
-            case 'summary':
-                if (todayRoutes.length === 0) return <NoRoutesMessage />;
-                return <SummaryView />;
-            default:
-                return <NoRoutesMessage />;
+            case 'current': return <CurrentTripView />;
+            case 'routeList': return <RouteListView />;
+            case 'summary': return <SummaryView />;
+            default: return <NoRoutesMessage />;
         }
     };
     
-    // -- Header Component --
     const { title, subtitle } = useMemo(() => {
         if (!isStarted && todayRoutes.length === 0) return { title: "Portal Driver", subtitle: currentUser?.name };
         if (areAllTripsCompleted) return { title: "Semua Selesai!", subtitle: "Kerja bagus!" };
@@ -281,7 +208,7 @@ export const DriverView: React.FC = () => {
         return { title: `Perjalanan ${activeTripIndex + 1}/${todayRoutes.length}`, subtitle: `${completedStopsCount}/${allStops.length} selesai` };
     }, [isStarted, areAllTripsCompleted, showInterstitial, activeTripIndex, todayRoutes, currentUser]);
 
-    const Header: React.FC<{title: string; subtitle?: string}> = ({title, subtitle}) => (<header className="bg-brand-primary text-white p-4 flex justify-between items-center shadow-md flex-shrink-0"><div><h1 className="text-xl font-bold">{title}</h1>{subtitle && <p className="text-sm opacity-90">{subtitle}</p>}</div><button onClick={logout} className="p-2 rounded-full hover:bg-white/20" aria-label="Logout"><ICONS.logout /></button></header>);
+    const Header: React.FC<{title: string; subtitle?: string}> = ({title, subtitle}) => (<header className="bg-brand-primary text-white p-4 flex justify-between items-center shadow-md flex-shrink-0"><div><h1 className="text-xl font-bold">{title}</h1>{subtitle && <p className="text-sm opacity-90">{subtitle}</p>}</div><div className="flex items-center gap-2"><button onClick={() => setMapModalOpen(true)} className="p-2 rounded-full hover:bg-white/20" aria-label="Lihat Peta"><ICONS.route /></button><button onClick={logout} className="p-2 rounded-full hover:bg-white/20" aria-label="Logout"><ICONS.logout /></button></div></header>);
 
     const navItems: {id: DriverActiveView, label: string, icon: React.ReactNode}[] = [
         { id: 'current', label: 'Saat Ini', icon: <ICONS.navigation /> },
@@ -305,6 +232,12 @@ export const DriverView: React.FC = () => {
                 ))}
             </nav>
 
+            <Modal title="Peta Rute Hari Ini" isOpen={isMapModalOpen} onClose={() => setMapModalOpen(false)} size="full">
+                <div style={{ height: '85vh', width: '100%' }}>
+                    <RouteMap routes={todayRoutesSorted} />
+                </div>
+            </Modal>
+
             <Modal title="Konfirmasi Bukti Pengantaran" isOpen={showProofModal} onClose={resetConfirmationState}>
                 {capturedImage && <img src={capturedImage} alt="Bukti"/>}
                 <div className="flex justify-end gap-2 pt-4"><button type="button" onClick={() => fileInputRef.current?.click()} className="bg-gray-200 py-2 px-4 rounded-lg">Ambil Ulang</button><button onClick={handleConfirmDelivery} disabled={updateStopMutation.isPending} className="bg-brand-primary text-white py-2 px-4 rounded-lg disabled:bg-gray-400">{updateStopMutation.isPending ? 'Mengonfirmasi...' : 'Konfirmasi'}</button></div>
@@ -315,7 +248,6 @@ export const DriverView: React.FC = () => {
                 {capturedImage && <img src={capturedImage} alt="Bukti gagal" className="mt-2 rounded-lg"/>}
                 <div className="flex justify-end gap-2 pt-4"><button type="button" onClick={resetConfirmationState} className="bg-gray-200 py-2 px-4 rounded-lg">Batal</button><button onClick={handleConfirmFailure} disabled={!failureReason || updateStopMutation.isPending} className="bg-red-600 text-white py-2 px-4 rounded-lg disabled:bg-gray-400">{updateStopMutation.isPending ? 'Mengonfirmasi...' : 'Konfirmasi Gagal'}</button></div>
             </Modal>
-            {showMap && <Modal title={`Peta Perjalanan`} isOpen={!!showMap} onClose={() => setShowMap(null)} size="xl"><RouteMap stops={showMap.stops} depot={depotLocation} /></Modal>}
         </div>
     );
 };

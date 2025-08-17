@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card } from '../ui/Card';
-import { Role, RoutePlan, Vehicle, VehicleStatus, SalesVisitRoutePlan, User, SalesVisitStop, RouteStop } from '../../types';
+import RouteMap from '../ui/RouteMap';
+import { Role, RoutePlan, Vehicle, VehicleStatus, SalesVisitRoutePlan, User, RouteStop } from '../../types';
 import { ICONS } from '../../constants';
 import { Modal } from '../ui/Modal';
-import { RouteMap } from '../ui/RouteMap';
 import { getVehicles } from '../../services/vehicleApiService';
 import { getUsers } from '../../services/userApiService';
 import { createDeliveryRoute, getDeliveryRoutes, deleteDeliveryRoute, createSalesRoute, getSalesRoutes, deleteSalesRoute } from '../../services/routeApiService';
@@ -25,9 +25,8 @@ export const RoutePlanning: React.FC = () => {
     const [activeTab, setActiveTab] = useState<PlanningTab>('delivery');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalError, setModalError] = useState<string | null>(null);
-    const [mapViewRoute, setMapViewRoute] = useState<RoutePlan | null>(null);
-    const [mapViewSalesRoute, setMapViewSalesRoute] = useState<SalesVisitRoutePlan | null>(null);
     const [expandedRouteIds, setExpandedRouteIds] = useState<string[]>([]);
+    const [selectedMapRoute, setSelectedMapRoute] = useState<any | null>(null);
 
     // --- Data Fetching ---
     const { data: users = [] } = useQuery<User[]>({ queryKey: ['users'], queryFn: getUsers });
@@ -73,7 +72,7 @@ export const RoutePlanning: React.FC = () => {
     };
 
     const handleDeleteDeliveryTrip = (tripId: string) => {
-        if (window.confirm("Anda yakin ingin menghapus/membatalkan perjalanan ini? Pesanan akan dikembalikan ke status 'Pending'.")) {
+        if (window.confirm("Anda yakin ingin menghapus/membatalkan perjalanan ini? Pesanan akan dikembalikan ke status \'Pending\'.")) {
             deleteDeliveryMutation.mutate(tripId);
         }
     };
@@ -135,10 +134,25 @@ export const RoutePlanning: React.FC = () => {
         return [...salesRoutes].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [salesRoutes]);
 
+    const sortedDeliveryRoutesForMap = useMemo(() => {
+        return deliveryRoutes.map(route => ({
+            ...route,
+            stops: [...route.stops].sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+        }));
+    }, [deliveryRoutes]);
+
+    const sortedSalesRoutesForMap = useMemo(() => {
+        return salesRoutes.map(route => ({
+            ...route,
+            stops: [...route.stops].sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+        }));
+    }, [salesRoutes]);
+
 
     return (
         <div className="p-8 space-y-6">
             <h1 className="text-3xl font-bold text-brand-dark">Perencanaan Rute</h1>
+            
             <div className="border-b border-gray-200"><nav className="-mb-px flex space-x-6"><button onClick={() => setActiveTab('delivery')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'delivery' ? 'border-brand-primary text-brand-primary' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Rute Pengiriman</button><button onClick={() => setActiveTab('salesVisit')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'salesVisit' ? 'border-brand-primary text-brand-primary' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Rute Kunjungan Sales</button></nav></div>
             
             <div className="mt-6">
@@ -150,7 +164,7 @@ export const RoutePlanning: React.FC = () => {
                                 const driver = users.find(d => d.id === driverId); const vehicle = vehicles.find(v => v.id === routeList[0]?.vehicleId); if (!driver || !vehicle) return null;
                                 return (<Card key={driverId}><div className="flex justify-between items-start mb-4"><div><h4 className="text-lg font-bold text-brand-primary">Pengemudi: {driver.name}</h4><p className="text-sm text-gray-500">Armada: {vehicle.plateNumber}</p></div><span className={`px-3 py-1 text-sm font-semibold rounded-full ${getStatusClass(vehicle.status)}`}>{vehicle.status}</span></div>{routeList.map((route, index) => {
                                     const isExpanded = expandedRouteIds.includes(route.id);
-                                     const stopsByStore = isExpanded ? route.stops.reduce<Record<string, { storeName: string; address: string; orders: RouteStop[] }>>((acc, stop) => {
+                                     const stopsByStore = isExpanded ? route.stops.reduce((acc: Record<string, { storeName: string; address: string; orders: RouteStop[] }>, stop) => {
                                         if (!acc[stop.storeId]) {
                                             acc[stop.storeId] = { storeName: stop.storeName, address: stop.address, orders: [] };
                                         }
@@ -163,8 +177,8 @@ export const RoutePlanning: React.FC = () => {
                                         <div className="flex justify-between items-center">
                                             <h5 className="font-semibold">Perjalanan {index + 1} ({Object.keys(stopsByStore).length || route.stops.length} pemberhentian)</h5>
                                             <div className="flex items-center gap-3">
+                                                <button onClick={() => { const mapData = sortedDeliveryRoutesForMap.find(r => r.id === route.id); if (mapData) setSelectedMapRoute(mapData); }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
                                                 <button onClick={() => toggleRouteExpansion(route.id)} className="text-sm font-semibold text-gray-600 hover:underline">{isExpanded ? 'Sembunyikan' : 'Lihat Detail'}</button>
-                                                <button onClick={() => setMapViewRoute(route)} className="text-sm text-brand-primary hover:underline">Peta</button>
                                                 <button onClick={() => handleDeleteDeliveryTrip(route.id)} className="p-2 rounded-lg bg-red-100 text-red-700" title="Hapus/Batalkan Perjalanan"><ICONS.trash /></button>
                                             </div>
                                         </div>
@@ -190,8 +204,8 @@ export const RoutePlanning: React.FC = () => {
                                         )}
                                     </div>
                                     )
-                                })}</Card>)
-                            })}</div></div>))
+                                })}</Card>) 
+                            })}</div></div>)) 
                         )}
                     </div>
                 ) : (
@@ -219,10 +233,10 @@ export const RoutePlanning: React.FC = () => {
                                                     <div className="flex justify-between items-center">
                                                         <h5 className="font-semibold">Daftar Kunjungan</h5>
                                                         <div className="flex items-center gap-3">
+                                                            <button onClick={() => { const mapData = sortedSalesRoutesForMap.find(r => r.id === route.id); if (mapData) setSelectedMapRoute(mapData); }} className="text-sm font-semibold text-brand-primary hover:underline">Peta</button>
                                                             <button onClick={() => toggleRouteExpansion(route.id)} className="text-sm font-semibold text-gray-600 hover:underline">
                                                                 {isExpanded ? 'Sembunyikan' : 'Lihat Detail'}
                                                             </button>
-                                                            <button onClick={() => setMapViewSalesRoute(route)} className="text-sm text-brand-primary hover:underline">Peta</button>
                                                             <button onClick={() => deleteSalesMutation.mutate(route.id)} className="p-2 rounded-lg bg-red-100 text-red-700" title="Hapus Rencana Kunjungan"><ICONS.trash /></button>
                                                         </div>
                                                     </div>
@@ -242,7 +256,8 @@ export const RoutePlanning: React.FC = () => {
                                             </Card>
                                         )
                                     })
-                                )}
+                                )
+                            }
                             </div>
                         )}
                     </div>
@@ -276,22 +291,13 @@ export const RoutePlanning: React.FC = () => {
                     </div>
                 )}
             </Modal>
-            
-            {mapViewRoute && <Modal title="Peta Rute" isOpen={!!mapViewRoute} onClose={() => setMapViewRoute(null)}><RouteMap stops={mapViewRoute.stops} depot={{ lat: -7.8664161, lng: 110.1486773 }} /></Modal>}
-            {mapViewSalesRoute && (
-                <Modal title={`Peta Kunjungan: ${users.find(u => u.id === mapViewSalesRoute.salesPersonId)?.name}`} isOpen={!!mapViewSalesRoute} onClose={() => setMapViewSalesRoute(null)}>
-                    <RouteMap
-                        stops={mapViewSalesRoute.stops.map(stop => ({
-                            id: stop.visitId,
-                            orderId: stop.visitId, // A unique string is needed
-                            storeId: stop.storeId,
-                            storeName: stop.storeName,
-                            address: stop.address,
-                            location: stop.location,
-                            status: 'Pending', // Status is for typing, not used in map visuals
-                        }))}
-                        depot={{ lat: -7.8664161, lng: 110.1486773 }}
-                    />
+
+            {/* Map Modal */}
+            {selectedMapRoute && (
+                <Modal title="Peta Rute" isOpen={!!selectedMapRoute} onClose={() => setSelectedMapRoute(null)} size="4xl">
+                    <div style={{ height: '60vh', width: '100%' }}>
+                        <RouteMap key={selectedMapRoute.id} routes={[selectedMapRoute]} />
+                    </div>
                 </Modal>
             )}
         </div>

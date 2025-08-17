@@ -3,10 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppContext } from '../../hooks/useAppContext';
 import { ICONS } from '../../constants';
 import { Card } from '../ui/Card';
+import RouteMap from '../ui/RouteMap'; // Import RouteMap component
 import { Store, Product, Visit, VisitStatus, SalesVisitRoutePlan, SalesVisitStop, SurveyResponse, SoughtProduct, CompetitorPrice, CompetitorVolume } from '../../types';
 import { Modal } from '../ui/Modal';
 import { DataView } from './DataView';
-import { RouteMap } from '../ui/RouteMap';
 import { getStores, createStore, classifyRegion } from '../../services/storeApiService';
 import { getProducts } from '../../services/productApiService';
 import { createOrder } from '../../services/orderApiService';
@@ -37,8 +37,16 @@ const VisitSchedule: React.FC = () => {
         return salesRoutes.find(r => r.salesPersonId === currentUser.id && r.date === today);
     }, [salesRoutes, currentUser]);
 
+    const transformedMapRoute = useMemo(() => {
+        if (!todayRoute) return [];
+        return [{
+            ...todayRoute,
+            stops: [...todayRoute.stops].sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+        }];
+    }, [todayRoute]);
+
     const [isStarted, setIsStarted] = useState(false);
-    const [isMapVisible, setIsMapVisible] = useState(false);
+    const [isMapModalOpen, setMapModalOpen] = useState(false);
     const [showProofModal, setShowProofModal] = useState(false);
     const [capturedImage, setCapturedImage] = useState<string | null>(null);
     const [stopBeingConfirmed, setStopBeingConfirmed] = useState<SalesVisitStop | null>(null);
@@ -101,41 +109,32 @@ const VisitSchedule: React.FC = () => {
     return (<div><input type="file" accept="image/*" capture="environment" ref={fileInputRef} className="hidden" onChange={handlePhotoCapture} />
         <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold">Rute Kunjungan</h2>
-            <button onClick={() => setIsMapVisible(v => !v)} className="text-sm font-semibold text-brand-primary flex items-center gap-1 p-2 rounded-lg hover:bg-brand-light">
-                {isMapVisible ? <ICONS.chevronDown className="w-4 h-4" /> : <ICONS.mapPin className="w-4 h-4" />}
-                {isMapVisible ? 'Sembunyikan' : 'Peta'}
+            <button onClick={() => setMapModalOpen(true)} className="flex items-center gap-2 text-sm font-semibold bg-white border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50">
+                <ICONS.route /> Peta
             </button>
         </div>
-        {isMapVisible && (
-            <Card className="mb-4 p-2">
-                 <RouteMap
-                    stops={todayRoute.stops.map(stop => ({
-                        id: stop.visitId,
-                        orderId: stop.visitId,
-                        storeId: stop.storeId,
-                        storeName: stop.storeName,
-                        address: stop.address,
-                        location: stop.location,
-                        status: 'Pending',
-                    }))}
-                    depot={{ lat: -7.8664161, lng: 110.1486773 }}
-                />
-            </Card>
-        )}
+        
         <ol className="space-y-3">{stopsWithStatus.map((stop, index) => (<li key={stop.visitId}><Card className={`p-4 ${stop.status !== VisitStatus.UPCOMING ? 'opacity-60' : ''}`}><div className="flex items-start justify-between"><div className="flex items-start gap-4"><span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${getStatusClass(stop.status).split(' ')[0]}`}>{index + 1}</span><div><p className="font-bold">{stop.storeName}</p><p className="text-xs text-gray-500">{stop.address}</p><p className="text-sm mt-1 font-semibold">{stop.purpose}</p></div></div><a href={`https://www.google.com/maps/search/?api=1&query=${stop.address}`} target="_blank" rel="noopener noreferrer" className="p-2"><ICONS.navigation /></a></div>{stop.status === VisitStatus.UPCOMING && (<div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => handleAttemptSuccess(stop)} className="bg-green-500 text-white font-semibold py-2 rounded-lg">Selesai</button><button onClick={() => handleSkipVisit(stop)} className="bg-yellow-500 text-white font-semibold py-2 rounded-lg">Lewati</button></div>)}</Card></li>))}</ol>
-    <Modal title="Konfirmasi Bukti" isOpen={showProofModal} onClose={() => setShowProofModal(false)}>{capturedImage && <img src={capturedImage} alt="Bukti"/>}<div className="flex justify-end gap-2 pt-4"><button onClick={() => setShowProofModal(false)} className="bg-gray-200 py-2 px-4 rounded-lg">Ambil Ulang</button><button onClick={handleConfirmVisit} className="bg-brand-primary text-white py-2 px-4 rounded-lg">Konfirmasi</button></div></Modal>
-    <Modal title={`Lewati Kunjungan: ${stopToSkip?.storeName}`} isOpen={!!stopToSkip} onClose={() => setStopToSkip(null)}>
-        <div className="space-y-4">
-            <label htmlFor="skipReason" className="block text-sm font-medium">Alasan (wajib)</label>
-            <textarea id="skipReason" value={skipReason} onChange={e => setSkipReason(e.target.value)} rows={3} className="w-full p-2 border rounded" placeholder="Contoh: Toko tutup, pemilik tidak di tempat..."></textarea>
-            <div className="flex justify-end gap-2 pt-2">
-                <button onClick={() => setStopToSkip(null)} className="bg-gray-200 py-2 px-4 rounded-lg">Batal</button>
-                <button onClick={handleConfirmSkip} disabled={!skipReason || updateVisitMutation.isPending} className="bg-brand-primary text-white py-2 px-4 rounded-lg disabled:bg-gray-400">
-                    {updateVisitMutation.isPending ? 'Menyimpan...' : 'Konfirmasi'}
-                </button>
+    
+        <Modal title="Peta Rute Kunjungan" isOpen={isMapModalOpen} onClose={() => setMapModalOpen(false)} size="full">
+            <div style={{ height: '85vh', width: '100%' }}>
+                <RouteMap routes={transformedMapRoute} />
             </div>
-        </div>
-    </Modal>
+        </Modal>
+
+        <Modal title="Konfirmasi Bukti" isOpen={showProofModal} onClose={() => setShowProofModal(false)}>{capturedImage && <img src={capturedImage} alt="Bukti"/>}<div className="flex justify-end gap-2 pt-4"><button onClick={() => setShowProofModal(false)} className="bg-gray-200 py-2 px-4 rounded-lg">Ambil Ulang</button><button onClick={handleConfirmVisit} className="bg-brand-primary text-white py-2 px-4 rounded-lg">Konfirmasi</button></div></Modal>
+        <Modal title={`Lewati Kunjungan: ${stopToSkip?.storeName}`} isOpen={!!stopToSkip} onClose={() => setStopToSkip(null)}>
+            <div className="space-y-4">
+                <label htmlFor="skipReason" className="block text-sm font-medium">Alasan (wajib)</label>
+                <textarea id="skipReason" value={skipReason} onChange={e => setSkipReason(e.target.value)} rows={3} className="w-full p-2 border rounded" placeholder="Contoh: Toko tutup, pemilik tidak di tempat..."></textarea>
+                <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={() => setStopToSkip(null)} className="bg-gray-200 py-2 px-4 rounded-lg">Batal</button>
+                    <button onClick={handleConfirmSkip} disabled={!skipReason || updateVisitMutation.isPending} className="bg-brand-primary text-white py-2 px-4 rounded-lg disabled:bg-gray-400">
+                        {updateVisitMutation.isPending ? 'Menyimpan...' : 'Konfirmasi'}
+                    </button>
+                </div>
+            </div>
+        </Modal>
     </div>)
 }
 
