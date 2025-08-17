@@ -4,24 +4,17 @@ import { Card } from '../ui/Card';
 import { ICONS } from '../../constants';
 import { Store, Coordinate } from '../../types';
 import { Modal } from '../ui/Modal';
-import { getStores, createStore, updateStore, deleteStore, classifyRegion } from '../../services/storeApiService';
-
-const parseCoordinatesFromURL = (url: string): Coordinate | null => {
-    const match = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-    if (match && match[1] && match[2]) {
-        return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
-    }
-    return null;
-};
+import { getStores, createStore, updateStore, deleteStore, geocodeAndClassifyAddress } from '../../services/storeApiService';
 
 export const StoreManagement: React.FC = () => {
     const queryClient = useQueryClient();
     const [isModalOpen, setIsModalOpen] = useState(false);
     const initialFormState: Omit<Store, 'id'> = { name: '', address: '', location: { lat: 0, lng: 0 }, region: '', owner: '', phone: '', subscribedSince: '', lastOrder: 'N/A', isPartner: false, partnerCode: '' };
     const [currentStore, setCurrentStore] = useState<Omit<Store, 'id'> | Store>(initialFormState);
-    const [googleMapsLink, setGoogleMapsLink] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [apiError, setApiError] = useState('');
+    
+    const [geocodedCoords, setGeocodedCoords] = useState<Coordinate | null>(null);
     const [detectedRegion, setDetectedRegion] = useState('');
 
     const [searchTerm, setSearchTerm] = useState('');
@@ -62,29 +55,25 @@ export const StoreManagement: React.FC = () => {
         onError: (err: any) => alert(err.response?.data?.message || 'Gagal menghapus toko.'),
     });
     
-    const classifyMutation = useMutation({
-        mutationFn: classifyRegion,
+    const geocodeMutation = useMutation({
+        mutationFn: geocodeAndClassifyAddress,
         onSuccess: (data) => {
-            setDetectedRegion(data.region);
-            if (data.region === 'Bukan di Kulon Progo') {
-                setApiError('Lokasi toko berada di luar wilayah layanan Kulon Progo.');
-            } else {
+            if (data.success) {
                 setApiError('');
+                setGeocodedCoords(data.coordinates);
+                setDetectedRegion(data.region);
+            } else {
+                setApiError(data.message || 'Gagal melakukan geocoding.');
+                setGeocodedCoords(null);
+                setDetectedRegion('');
             }
         },
         onError: (err: any) => {
+            setApiError(err.response?.data?.message || 'Terjadi kesalahan pada server.');
+            setGeocodedCoords(null);
             setDetectedRegion('');
-            setApiError(err.response?.data?.message || 'Gagal mendeteksi wilayah.');
         },
     });
-
-    // Sync detected region to the editable form state
-    useEffect(() => {
-        if (detectedRegion) {
-            setCurrentStore(prev => ({ ...prev, region: detectedRegion }));
-        }
-    }, [detectedRegion]);
-
 
     const filteredStores = useMemo(() => {
         const filtered = stores.filter(store => {
@@ -94,15 +83,14 @@ export const StoreManagement: React.FC = () => {
             const partnerMatch = filterPartnerStatus === 'all' || (filterPartnerStatus === 'yes' && store.isPartner) || (filterPartnerStatus === 'no' && !store.isPartner);
             return searchMatch && regionMatch && partnerMatch;
         });
-        // Sort by 'subscribedSince' date descending, so newest are first.
         return filtered.sort((a, b) => new Date(b.subscribedSince).getTime() - new Date(a.subscribedSince).getTime());
     }, [stores, searchTerm, filterRegion, filterPartnerStatus]);
     
     const resetForm = () => {
         setIsEditing(false);
         setCurrentStore(initialFormState);
-        setGoogleMapsLink('');
         setApiError('');
+        setGeocodedCoords(null);
         setDetectedRegion('');
     }
 
@@ -115,11 +103,14 @@ export const StoreManagement: React.FC = () => {
         resetForm();
         setIsEditing(true);
         setCurrentStore(store);
-        setDetectedRegion(store.region); // Pre-fill region
+        if (store.location) {
+            setGeocodedCoords(store.location);
+        }
+        setDetectedRegion(store.region);
         setIsModalOpen(true);
     };
 
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const target = e.target;
         const name = target.name;
         const value = target.type === 'checkbox' ? (target as HTMLInputElement).checked : target.value;
@@ -130,42 +121,42 @@ export const StoreManagement: React.FC = () => {
         }));
     };
     
-    const handleDetectRegion = async () => {
-        setApiError('');
-        setDetectedRegion('');
-        const coords = parseCoordinatesFromURL(googleMapsLink);
-        if (!coords) {
-            setApiError("Link Google Maps tidak valid. Pastikan formatnya benar.");
+    const handleGeocode = () => {
+        const address = currentStore.address;
+        if (!address || address.trim() === '') {
+            setApiError('Alamat tidak boleh kosong.');
             return;
         }
-        classifyMutation.mutate(coords);
+        geocodeMutation.mutate(address);
     };
     
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         setApiError('');
 
+        if (!geocodedCoords || !detectedRegion) {
+            setApiError('Lokasi belum dicek. Harap gunakan tombol "Cek Lokasi & Wilayah".');
+            return;
+        }
+        
+        if (detectedRegion === 'Bukan di Kulon Progo') {
+            setApiError('Lokasi toko berada di luar wilayah layanan Kulon Progo.');
+            return;
+        }
+
         if (currentStore.isPartner && !currentStore.partnerCode) {
             setApiError('Kode Mitra wajib diisi jika toko adalah mitra.');
             return;
         }
 
-        if (!currentStore.region) {
-            setApiError('Wilayah belum ditentukan. Harap deteksi dan pilih wilayah.');
-            return;
-        }
-        
-        let coordinates = 'location' in currentStore ? currentStore.location : null;
-        if (googleMapsLink) {
-            const parsedCoords = parseCoordinatesFromURL(googleMapsLink);
-            if (parsedCoords) coordinates = parsedCoords;
-            else { setApiError('Link Google Maps tidak valid.'); return; }
-        } else if (!isEditing) {
-            setApiError('Link Google Maps wajib diisi untuk toko baru.'); return;
-        }
-        if (!coordinates) { setApiError('Lokasi tidak dapat ditentukan.'); return; }
+        const storeData: any = { 
+            ...currentStore, 
+            lat: geocodedCoords.lat,
+            lng: geocodedCoords.lng,
+            region: detectedRegion
+        };
+        delete storeData.location;
 
-        const storeData = { ...currentStore, location: coordinates };
         if (!storeData.isPartner) storeData.partnerCode = '';
 
         if(isEditing) {
@@ -181,7 +172,7 @@ export const StoreManagement: React.FC = () => {
         }
     };
     
-    const canSubmit = currentStore.name && currentStore.owner && currentStore.phone && currentStore.region && currentStore.region !== 'Bukan di Kulon Progo' && !classifyMutation.isPending && (!currentStore.isPartner || (currentStore.isPartner && currentStore.partnerCode));
+    const canSubmit = currentStore.name && currentStore.owner && currentStore.phone && detectedRegion && detectedRegion !== 'Bukan di Kulon Progo' && geocodedCoords && !geocodeMutation.isPending && (!currentStore.isPartner || (currentStore.isPartner && currentStore.partnerCode));
 
     return (
         <div className="p-8 space-y-6">
@@ -251,27 +242,36 @@ export const StoreManagement: React.FC = () => {
                     <input type="text" name="name" placeholder="Nama Toko" value={currentStore.name} onChange={handleInputChange} className="w-full p-2 border rounded" required />
                     <input type="text" name="owner" placeholder="Nama Pemilik" value={currentStore.owner} onChange={handleInputChange} className="w-full p-2 border rounded" required />
                     <input type="text" name="phone" placeholder="Nomor Telepon" value={currentStore.phone} onChange={handleInputChange} className="w-full p-2 border rounded" required />
-                    <input type="text" name="address" placeholder="Alamat" value={currentStore.address} onChange={handleInputChange} className="w-full p-2 border rounded" required />
                     
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Link Google Maps</label>
-                        <div className="flex items-center gap-2 mt-1">
-                            <input type="url" value={googleMapsLink} onChange={(e) => setGoogleMapsLink(e.target.value)} className="w-full p-2 border rounded" required={!isEditing} />
-                            <button type="button" onClick={handleDetectRegion} disabled={classifyMutation.isPending || !googleMapsLink} className="flex-shrink-0 bg-brand-secondary text-white font-semibold py-2 px-4 rounded-lg disabled:bg-gray-400">
-                                {classifyMutation.isPending ? '...' : 'Deteksi'}
-                            </button>
-                        </div>
+                    <div className="space-y-2 p-3 bg-gray-50 rounded-lg border">
+                        <label htmlFor="address" className="block text-sm font-medium text-gray-700">Alamat Lengkap Toko</label>
+                        <textarea id="address" name="address" placeholder="Ketik alamat lengkap di sini..." value={currentStore.address} onChange={handleInputChange} className="w-full p-2 border rounded" rows={3} required />
+                        <button
+                            type="button"
+                            onClick={handleGeocode}
+                            disabled={!currentStore.address || geocodeMutation.isPending}
+                            className="w-full flex items-center justify-center gap-2 bg-brand-secondary text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-brand-dark transition duration-300 disabled:bg-gray-400"
+                        >
+                            {geocodeMutation.isPending ? 'Mencari Lokasi...' : 'Cek Lokasi & Wilayah dari Alamat'}
+                        </button>
                     </div>
                     
-                    { (currentStore.region || classifyMutation.isPending) && (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Wilayah</label>
-                            <div className={`w-full p-2 border rounded mt-1 font-semibold cursor-not-allowed ${
-                                currentStore.region === 'Bukan di Kulon Progo'
-                                    ? 'bg-red-100 text-red-700'
-                                    : 'bg-gray-100 text-gray-900'
-                            }`}>
-                                {classifyMutation.isPending ? 'Menganalisis...' : currentStore.region || 'Belum dideteksi'}
+                    {(geocodedCoords || detectedRegion) && (
+                        <div className="space-y-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                            <h3 className="text-sm font-bold text-green-800">Hasil Pengecekan Lokasi</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-500">Latitude</label>
+                                    <p className="font-mono bg-white p-1 rounded border">{geocodedCoords?.lat ?? '-'}</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-500">Longitude</label>
+                                    <p className="font-mono bg-white p-1 rounded border">{geocodedCoords?.lng ?? '-'}</p>
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-medium text-gray-500">Wilayah</label>
+                                    <p className={`font-bold p-1 rounded border ${detectedRegion === 'Bukan di Kulon Progo' ? 'bg-red-100 text-red-700' : 'bg-white'}`}>{detectedRegion || '-'}</p>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -283,7 +283,9 @@ export const StoreManagement: React.FC = () => {
                     
                     <div className="flex justify-end pt-4">
                         <button type="button" onClick={() => setIsModalOpen(false)} className="bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg mr-2 hover:bg-gray-300">Batal</button>
-                        <button type="submit" disabled={!canSubmit || createMutation.isPending || updateMutation.isPending} className="bg-brand-primary text-white font-bold py-2 px-4 rounded-lg hover:bg-brand-dark disabled:bg-gray-400">{createMutation.isPending || updateMutation.isPending ? 'Menyimpan...' : (isEditing ? "Simpan Perubahan" : "Tambah Toko")}</button>
+                        <button type="submit" disabled={!canSubmit || createMutation.isPending || updateMutation.isPending} className="bg-brand-primary text-white font-bold py-2 px-4 rounded-lg hover:bg-brand-dark disabled:bg-gray-400">
+                            {createMutation.isPending || updateMutation.isPending ? 'Menyimpan...' : (isEditing ? "Simpan Perubahan" : "Tambah Toko")}
+                        </button>
                     </div>
                 </form>
             </Modal>

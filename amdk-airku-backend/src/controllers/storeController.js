@@ -1,9 +1,72 @@
-
-
 const Store = require('../models/storeModel');
+const { geocodeAddress } = require('../services/geocodingService'); // Impor service baru
 const { classifyStoreRegion } = require('../services/geminiService');
 
-const getStores = async (req, res) => {
+function extractCoordsFromMapsUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const regex = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
+  const match = url.match(regex);
+  if (match && match[1] && match[2]) {
+    return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+  }
+  return null;
+}
+
+async function getCoordinates(data) {
+  // Prioritas 1: Koordinat dari GPS Sales (jika dikirim langsung)
+  if (data.lat && data.lng) {
+    return { lat: parseFloat(data.lat), lng: parseFloat(data.lng) };
+  }
+
+  // Prioritas 2: Ekstrak dari Link Google Maps
+  const coordsFromUrl = extractCoordsFromMapsUrl(data.address);
+  if (coordsFromUrl) {
+    return coordsFromUrl;
+  }
+
+  // Prioritas 3: Geocoding dari Alamat Teks (untuk Admin)
+  if (data.address) {
+    return await geocodeAddress(data.address);
+  }
+
+  return null; // Jika semua gagal
+}
+
+const createStore = async (req, res) => {
+  try {
+    const storeData = { ...req.body };
+    const coords = await getCoordinates(storeData);
+
+    storeData.lat = coords ? coords.lat : null;
+    storeData.lng = coords ? coords.lng : null;
+
+    const newStore = await Store.create(storeData);
+    res.status(201).json(newStore);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const updateStore = async (req, res) => {
+  try {
+    const storeData = { ...req.body };
+    const coords = await getCoordinates(storeData);
+
+    storeData.lat = coords ? coords.lat : null;
+    storeData.lng = coords ? coords.lng : null;
+
+    const updatedStore = await Store.update(req.params.id, storeData);
+    if (updatedStore) {
+      res.json(updatedStore);
+    } else {
+      res.status(404).json({ message: 'Store not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getAllStores = async (req, res) => {
     try {
         const stores = await Store.getAll();
         res.json(stores);
@@ -23,41 +86,6 @@ const getStoreById = async (req, res) => {
         }
     } catch (error) {
         console.error(`Error getting store ${req.params.id}:`, error);
-        res.status(500).json({ message: 'Terjadi kesalahan pada server.' });
-    }
-};
-
-const createStore = async (req, res) => {
-    const { name, address, location, region, owner, phone, isPartner, partnerCode } = req.body;
-    if (!name || !address || !location || !region || !owner || !phone) {
-        return res.status(400).json({ message: 'Harap isi semua kolom yang diperlukan.' });
-    }
-    try {
-        const newStoreData = {
-            ...req.body,
-            subscribedSince: new Date().toISOString().split('T')[0],
-            lastOrder: 'N/A'
-        };
-        const newStore = await Store.create(newStoreData);
-        res.status(201).json(newStore);
-    } catch (error) {
-        console.error('Error creating store:', error);
-        res.status(500).json({ message: 'Terjadi kesalahan pada server.' });
-    }
-};
-
-const updateStore = async (req, res) => {
-    try {
-        const store = await Store.getById(req.params.id);
-        if (!store) {
-            return res.status(404).json({ message: 'Toko tidak ditemukan.' });
-        }
-        
-        const updatedStoreData = { ...store, ...req.body };
-        const result = await Store.update(req.params.id, updatedStoreData);
-        res.json(result);
-    } catch (error) {
-        console.error(`Error updating store ${req.params.id}:`, error);
         res.status(500).json({ message: 'Terjadi kesalahan pada server.' });
     }
 };
@@ -102,11 +130,47 @@ const classifyRegion = async (req, res) => {
     }
 };
 
+const geocodeAndClassify = async (req, res) => {
+    const { address } = req.body;
+
+    if (!address) {
+        return res.status(400).json({ message: 'Alamat wajib diisi.' });
+    }
+
+    try {
+        const coordinates = await geocodeAddress(address);
+        if (!coordinates) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Tidak dapat menemukan koordinat untuk alamat tersebut.' 
+            });
+        }
+
+        const regionResult = await classifyStoreRegion(coordinates);
+        
+        res.json({
+            success: true,
+            coordinates,
+            region: regionResult.region,
+            message: 'Alamat berhasil di-geocode dan wilayah diklasifikasikan.'
+        });
+
+    } catch (error) {
+        console.error('Error in geocodeAndClassify controller:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Gagal melakukan geocoding dan klasifikasi alamat.' 
+        });
+    }
+};
+
+
 module.exports = {
-    getStores,
+    getAllStores,
     getStoreById,
     createStore,
     updateStore,
     deleteStore,
     classifyRegion,
+    geocodeAndClassify,
 };

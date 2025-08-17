@@ -26,3 +26,8 @@ export const classifyRegion = async (coords: Coordinate): Promise<{ region: stri
     const response = await api.post('/stores/classify-region', coords);
     return response.data;
 };
+
+export const geocodeAndClassifyAddress = async (address: string): Promise<{ coordinates: Coordinate, region: string, success: boolean, message: string }> => {
+    const response = await api.post('/stores/geocode-classify', { address });
+    return response.data;
+};

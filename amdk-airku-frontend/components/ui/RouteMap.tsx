@@ -66,11 +66,22 @@ const RecenterAutomatically = ({bounds}: {bounds: L.LatLngBounds}) => {
 }
 
 export const RouteMap: React.FC<RouteMapProps> = ({ stops, depot }) => {
-  // Filter stops that have valid coordinates
-  const stopsWithCoords = stops.filter(stop => 
+  // Convert and validate stops coordinates
+  const stopsWithCoords = stops.map(stop => {
+    const lat = stop.location && typeof stop.location.lat === 'string' ? parseFloat(stop.location.lat) : stop.location.lat;
+    const lng = stop.location && typeof stop.location.lng === 'string' ? parseFloat(stop.location.lng) : stop.location.lng;
+
+    return {
+      ...stop,
+      location: {
+        lat: lat,
+        lng: lng
+      }
+    };
+  }).filter(stop => 
     stop.location && 
-    typeof stop.location.lat === 'number' && 
-    typeof stop.location.lng === 'number' &&
+    typeof stop.location.lat === 'number' && !isNaN(stop.location.lat) &&
+    typeof stop.location.lng === 'number' && !isNaN(stop.location.lng) &&
     stop.location.lat !== 0 && 
     stop.location.lng !== 0
   );
