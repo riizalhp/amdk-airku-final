@@ -12,6 +12,17 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        rollupOptions: {
+          onwarn: (warning, warn) => {
+            // Suppress "use client" directive warnings from @tanstack/react-query
+            if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('use client')) {
+              return;
+            }
+            warn(warning);
+          }
+        }
       }
     };
 });

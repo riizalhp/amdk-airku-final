@@ -6,7 +6,7 @@ import { UserManagement } from './UserManagement';
 import { StoreManagement } from './StoreManagement';
 import { ProductManagement } from './ProductManagement';
 import { OrderManagement } from './OrderManagement';
-import { FleetManagement } from './Fleetmanagement';
+import { FleetManagement } from './FleetManagement';
 import { VehicleManagement } from './VehicleManagement';
 import { SurveyReports } from './SurveyReports';
 import { VisitSchedule } from './VisitSchedule';
