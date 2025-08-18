@@ -16,6 +16,7 @@ const routeRoutes = require('./routes/routes');
 const visitRoutes = require('./routes/visits');
 const surveyRoutes = require('./routes/surveys');
 const salesVisitRoutes = require('./routes/salesVisitRoutes');
+const regionRoutes = require('./routes/regionRoutes');
 
 const app = express();
 
@@ -90,6 +91,7 @@ app.use('/api/routes', routeRoutes);
 app.use('/api/visits', visitRoutes);
 app.use('/api/surveys', surveyRoutes);
 app.use('/api/sales-routes', salesVisitRoutes);
+app.use('/api/regions', regionRoutes);
 
 
 // Simple test route

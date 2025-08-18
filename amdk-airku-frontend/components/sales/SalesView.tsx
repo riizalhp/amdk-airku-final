@@ -7,7 +7,7 @@ import { RouteMap } from '../ui/RouteMap';
 import { Store, Product, Visit, VisitStatus, SalesVisitRoutePlan, SalesVisitStop, SurveyResponse, SoughtProduct, CompetitorPrice, CompetitorVolume, Coordinate } from '../../types';
 import { Modal } from '../ui/Modal';
 import { DataView } from './DataView';
-import { getStores, createStore, classifyRegion } from '../../services/storeApiService';
+import { getStores, createStore } from '../../services/storeApiService';
 import { getProducts } from '../../services/productApiService';
 import { createOrder } from '../../services/orderApiService';
 import { getVisits, updateVisit } from '../../services/visitApiService';
@@ -163,7 +163,6 @@ const AcquireStore: React.FC = () => {
     const [lat, setLat] = useState<number | null>(null);
     const [lng, setLng] = useState<number | null>(null);
     
-    const classifyMutation = useMutation({ mutationFn: classifyRegion, onSuccess: (data) => { setDetectedRegion(data.region); if (data.region === 'Bukan di Kulon Progo') setApiError('Lokasi di luar wilayah layanan.'); else setApiError(''); }, onError: () => setApiError('Gagal mendeteksi wilayah.') });
     const createStoreMutation = useMutation({ mutationFn: createStore, onSuccess: () => { alert('Toko baru berhasil dibuat!'); queryClient.invalidateQueries({queryKey: ['stores']}); setForm({ name: '', owner: '', phone: '', address: '', googleMapsLink: '', isPartner: false, partnerCode: '' }); setDetectedRegion(''); setLat(null); setLng(null); }, onError: (err: any) => setApiError(err.response?.data?.message || 'Gagal membuat toko.') });
     
     const handleGetCurrentLocation = () => {
@@ -183,21 +182,6 @@ const AcquireStore: React.FC = () => {
             }
         );
     };
-
-    const handleClassify = () => {
-        let coords: Coordinate | null = null;
-        if (lat && lng) {
-            coords = { lat, lng };
-        } else {
-            coords = parseCoordinatesFromURL(form.googleMapsLink);
-        }
-        
-        if (coords) {
-            classifyMutation.mutate(coords);
-        } else {
-            setApiError('Koordinat tidak ditemukan. Gunakan GPS atau masukkan link Google Maps yang valid.');
-        }
-    };
     
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault(); 
@@ -210,10 +194,21 @@ const AcquireStore: React.FC = () => {
             coords = parseCoordinatesFromURL(form.googleMapsLink);
         }
 
-        if (!coords || !detectedRegion || detectedRegion === 'Bukan di Kulon Progo') { setApiError('Lokasi tidak valid atau belum dideteksi. Pastikan menekan tombol "Deteksi Wilayah".'); return; }
+        if (!coords) {
+            setApiError('Koordinat tidak ditemukan. Gunakan GPS atau masukkan link Google Maps yang valid.');
+            return;
+        }
+
+        let region;
+        if (coords.lng > 110.1486773) { // Based on the backend logic
+            region = "Timur";
+        } else {
+            region = "Barat";
+        }
+
         if (form.isPartner && !form.partnerCode) { setApiError('Kode Mitra wajib diisi.'); return; }
         
-        createStoreMutation.mutate({ ...form, lat: coords.lat, lng: coords.lng, region: detectedRegion });
+        createStoreMutation.mutate({ ...form, lat: coords.lat, lng: coords.lng, region: region });
     };
 
     return (<Card>
@@ -250,18 +245,13 @@ const AcquireStore: React.FC = () => {
 
             <input type="text" placeholder="Link Google Maps (Alternatif)" value={form.googleMapsLink} onChange={e => setForm(f => ({...f, googleMapsLink: e.target.value}))} className="w-full p-2 border rounded"/>
             
-            <div className="p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-4">
-                    <button type="button" onClick={handleClassify} disabled={classifyMutation.isPending || (!form.googleMapsLink && !lat)} className="bg-brand-secondary text-white font-semibold py-2 px-4 rounded-lg disabled:bg-gray-400">{classifyMutation.isPending ? 'Menganalisis...' : 'Deteksi Wilayah'}</button>
-                    {detectedRegion && <p className="font-bold">Wilayah: <span className="text-lg">{detectedRegion}</span></p>}
-                </div>
-            </div>
+            
             <div className="pt-4 border-t">
                 <div className="flex items-center space-x-3"><input type="checkbox" id="isPartner" checked={form.isPartner} onChange={e => setForm(f=>({...f, isPartner: e.target.checked}))} className="h-4 w-4"/> <label htmlFor="isPartner">Jadikan Mitra</label></div>
                 {form.isPartner && <input type="text" placeholder="Kode Mitra" value={form.partnerCode} onChange={e => setForm(f=>({...f, partnerCode: e.target.value}))} className="mt-2 w-full p-2 border rounded"/>}
             </div>
             {apiError && <p className="text-sm text-red-600">{apiError}</p>}
-            <button type="submit" className="w-full bg-brand-primary text-white font-bold py-3 rounded-lg disabled:bg-gray-400" disabled={createStoreMutation.isPending || !detectedRegion || detectedRegion === 'Bukan di Kulon Progo'}>Tambah Toko</button>
+            <button type="submit" className="w-full bg-brand-primary text-white font-bold py-3 rounded-lg disabled:bg-gray-400" disabled={createStoreMutation.isPending || !isRegionChecked || !detectedRegion || detectedRegion === 'Bukan di Kulon Progo'}>Tambah Toko</button>
         </form>
     </Card>)
 }

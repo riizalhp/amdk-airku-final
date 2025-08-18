@@ -4,18 +4,23 @@ import { Card } from '../ui/Card';
 import { ICONS } from '../../constants';
 import { Store, Coordinate } from '../../types';
 import { Modal } from '../ui/Modal';
-import { getStores, createStore, updateStore, deleteStore, geocodeAndClassifyAddress } from '../../services/storeApiService';
+import { getStores, createStore, updateStore, deleteStore } from '../../services/storeApiService';
+import { checkRegion } from '../../services/regionApiService'; 
 
 export const StoreManagement: React.FC = () => {
     const queryClient = useQueryClient();
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const initialFormState: Omit<Store, 'id'> = { name: '', address: '', location: { lat: 0, lng: 0 }, region: '', owner: '', phone: '', subscribedSince: '', lastOrder: 'N/A', isPartner: false, partnerCode: '' };
-    const [currentStore, setCurrentStore] = useState<Omit<Store, 'id'> | Store>(initialFormState);
+    const initialFormState: Omit<Store, 'id'> & { lat: string; lng: string } = { 
+        name: '', address: '', location: { lat: 0, lng: 0 }, region: '', 
+        owner: '', phone: '', subscribedSince: '', lastOrder: 'N/A', 
+        isPartner: false, partnerCode: '', lat: '', lng: '' 
+    };
+    const [currentStore, setCurrentStore] = useState<Omit<Store, 'id'> | (Store & { lat: string; lng: string })>(initialFormState);
     const [isEditing, setIsEditing] = useState(false);
     const [apiError, setApiError] = useState('');
     
-    const [geocodedCoords, setGeocodedCoords] = useState<Coordinate | null>(null);
     const [detectedRegion, setDetectedRegion] = useState('');
+    const [isRegionChecked, setIsRegionChecked] = useState(false);
 
     const [searchTerm, setSearchTerm] = useState('');
     const [filterRegion, setFilterRegion] = useState('all');
@@ -55,23 +60,23 @@ export const StoreManagement: React.FC = () => {
         onError: (err: any) => alert(err.response?.data?.message || 'Gagal menghapus toko.'),
     });
     
-    const geocodeMutation = useMutation({
-        mutationFn: geocodeAndClassifyAddress,
+    const regionCheckMutation = useMutation({
+        mutationFn: (coords: { lat: number; lng: number }) => checkRegion(coords.lat, coords.lng),
         onSuccess: (data) => {
             if (data.success) {
                 setApiError('');
-                setGeocodedCoords(data.coordinates);
                 setDetectedRegion(data.region);
+                setIsRegionChecked(true);
             } else {
-                setApiError(data.message || 'Gagal melakukan geocoding.');
-                setGeocodedCoords(null);
+                setApiError(data.message || 'Gagal mengecek wilayah.');
                 setDetectedRegion('');
+                setIsRegionChecked(false);
             }
         },
         onError: (err: any) => {
             setApiError(err.response?.data?.message || 'Terjadi kesalahan pada server.');
-            setGeocodedCoords(null);
             setDetectedRegion('');
+            setIsRegionChecked(false);
         },
     });
 
@@ -90,8 +95,8 @@ export const StoreManagement: React.FC = () => {
         setIsEditing(false);
         setCurrentStore(initialFormState);
         setApiError('');
-        setGeocodedCoords(null);
         setDetectedRegion('');
+        setIsRegionChecked(false);
     }
 
     const openModalForAdd = () => {
@@ -102,11 +107,13 @@ export const StoreManagement: React.FC = () => {
     const openModalForEdit = (store: Store) => {
         resetForm();
         setIsEditing(true);
-        setCurrentStore(store);
-        if (store.location) {
-            setGeocodedCoords(store.location);
-        }
+        setCurrentStore({
+            ...store,
+            lat: store.location.lat.toString(),
+            lng: store.location.lng.toString(),
+        });
         setDetectedRegion(store.region);
+        setIsRegionChecked(true); // Anggap sudah terverifikasi saat edit
         setIsModalOpen(true);
     };
 
@@ -119,23 +126,30 @@ export const StoreManagement: React.FC = () => {
             ...prev,
             [name]: value
         }));
+
+        if (name === 'lat' || name === 'lng') {
+            setIsRegionChecked(false);
+            setDetectedRegion('');
+        }
     };
     
-    const handleGeocode = () => {
-        const address = currentStore.address;
-        if (!address || address.trim() === '') {
-            setApiError('Alamat tidak boleh kosong.');
+    const handleRegionCheck = () => {
+        const lat = parseFloat((currentStore as any).lat);
+        const lng = parseFloat((currentStore as any).lng);
+
+        if (isNaN(lat) || isNaN(lng)) {
+            setApiError('Latitude dan Longitude harus berupa angka yang valid.');
             return;
         }
-        geocodeMutation.mutate(address);
+        regionCheckMutation.mutate({ lat, lng } as Coordinate);
     };
     
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         setApiError('');
 
-        if (!geocodedCoords || !detectedRegion) {
-            setApiError('Lokasi belum dicek. Harap gunakan tombol "Cek Lokasi & Wilayah".');
+        if (!isRegionChecked) {
+            setApiError('Harap cek wilayah terlebih dahulu menggunakan tombol "Cek Wilayah".');
             return;
         }
         
@@ -149,10 +163,12 @@ export const StoreManagement: React.FC = () => {
             return;
         }
 
+        const { lat, lng, ...restOfStore } = currentStore as any;
+
         const storeData: any = { 
-            ...currentStore, 
-            lat: geocodedCoords.lat,
-            lng: geocodedCoords.lng,
+            ...restOfStore,
+            lat: parseFloat(lat),
+            lng: parseFloat(lng),
             region: detectedRegion
         };
         delete storeData.location;
@@ -172,7 +188,7 @@ export const StoreManagement: React.FC = () => {
         }
     };
     
-    const canSubmit = currentStore.name && currentStore.owner && currentStore.phone && detectedRegion && detectedRegion !== 'Bukan di Kulon Progo' && geocodedCoords && !geocodeMutation.isPending && (!currentStore.isPartner || (currentStore.isPartner && currentStore.partnerCode));
+    const canSubmit = currentStore.name && currentStore.owner && currentStore.phone && isRegionChecked && detectedRegion !== 'Bukan di Kulon Progo' && !regionCheckMutation.isPending && (!currentStore.isPartner || (currentStore.isPartner && currentStore.partnerCode));
 
     return (
         <div className="p-8 space-y-6">
@@ -242,37 +258,44 @@ export const StoreManagement: React.FC = () => {
                     <input type="text" name="name" placeholder="Nama Toko" value={currentStore.name} onChange={handleInputChange} className="w-full p-2 border rounded" required />
                     <input type="text" name="owner" placeholder="Nama Pemilik" value={currentStore.owner} onChange={handleInputChange} className="w-full p-2 border rounded" required />
                     <input type="text" name="phone" placeholder="Nomor Telepon" value={currentStore.phone} onChange={handleInputChange} className="w-full p-2 border rounded" required />
+                    <textarea name="address" placeholder="Alamat Lengkap Toko" value={currentStore.address} onChange={handleInputChange} className="w-full p-2 border rounded" rows={3} required />
                     
                     <div className="space-y-2 p-3 bg-gray-50 rounded-lg border">
-                        <label htmlFor="address" className="block text-sm font-medium text-gray-700">Alamat Lengkap Toko</label>
-                        <textarea id="address" name="address" placeholder="Ketik alamat lengkap di sini..." value={currentStore.address} onChange={handleInputChange} className="w-full p-2 border rounded" rows={3} required />
+                        <label className="block text-sm font-medium text-gray-700">Koordinat Lokasi</label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <input 
+                                type="text" 
+                                name="lat" 
+                                placeholder="Latitude" 
+                                value={(currentStore as any).lat} 
+                                onChange={handleInputChange} 
+                                className="w-full p-2 border rounded" 
+                                required 
+                            />
+                            <input 
+                                type="text" 
+                                name="lng" 
+                                placeholder="Longitude" 
+                                value={(currentStore as any).lng} 
+                                onChange={handleInputChange} 
+                                className="w-full p-2 border rounded" 
+                                required 
+                            />
+                        </div>
                         <button
                             type="button"
-                            onClick={handleGeocode}
-                            disabled={!currentStore.address || geocodeMutation.isPending}
+                            onClick={handleRegionCheck}
+                            disabled={!(currentStore as any).lat || !(currentStore as any).lng || regionCheckMutation.isPending}
                             className="w-full flex items-center justify-center gap-2 bg-brand-secondary text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-brand-dark transition duration-300 disabled:bg-gray-400"
                         >
-                            {geocodeMutation.isPending ? 'Mencari Lokasi...' : 'Cek Lokasi & Wilayah dari Alamat'}
+                            {regionCheckMutation.isPending ? 'Mengecek Wilayah...' : 'Cek Wilayah dari Koordinat'}
                         </button>
                     </div>
                     
-                    {(geocodedCoords || detectedRegion) && (
+                    {isRegionChecked && detectedRegion && (
                         <div className="space-y-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                            <h3 className="text-sm font-bold text-green-800">Hasil Pengecekan Lokasi</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-500">Latitude</label>
-                                    <p className="font-mono bg-white p-1 rounded border">{geocodedCoords?.lat ?? '-'}</p>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-500">Longitude</label>
-                                    <p className="font-mono bg-white p-1 rounded border">{geocodedCoords?.lng ?? '-'}</p>
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-500">Wilayah</label>
-                                    <p className={`font-bold p-1 rounded border ${detectedRegion === 'Bukan di Kulon Progo' ? 'bg-red-100 text-red-700' : 'bg-white'}`}>{detectedRegion || '-'}</p>
-                                </div>
-                            </div>
+                            <h3 className="text-sm font-bold text-green-800">Hasil Pengecekan Wilayah</h3>
+                            <p className={`font-bold p-1 rounded border ${detectedRegion === 'Bukan di Kulon Progo' ? 'bg-red-100 text-red-700' : 'bg-white'}`}>{detectedRegion}</p>
                         </div>
                     )}
                     

@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { classifyStoreRegion } = require('../controllers/regionController');
+const { checkRegion } = require('../controllers/regionController');
 const { protect } = require('../middleware/authMiddleware');
 
-router.post('/classify', protect, classifyStoreRegion);
+router.post('/check', protect, checkRegion);
 
 module.exports = router;
