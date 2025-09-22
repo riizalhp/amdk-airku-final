@@ -2,7 +2,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api', // Adjust if your backend runs on a different port
+  baseURL: 'https://amdk-airku-final-production-cdc3.up.railway.app', // Adjust if your backend runs on a different port
   headers: {
     'Content-Type': 'application/json',
   },
