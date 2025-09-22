@@ -68,7 +68,7 @@ const Vehicle = {
                 s.name as storeName
             FROM orders o
             JOIN stores s ON o.storeId = s.id
-            WHERE o.assignedVehicleId IS NOT NULL AND o.status = 'Pending'
+            WHERE o.assignedVehicleId IS NOT NULL AND o.status IN ('Pending', 'Routed', 'Delivering', 'Failed')
             ORDER BY o.orderDate ASC
         `);
 

@@ -2,6 +2,31 @@
 const pool = require('../config/db');
 const { randomUUID } = require('crypto');
 
+// Helper to calculate distance between two lat/lng points in KM
+
+// Helper to calculate distance between two lat/lng points in KM
+const haversineDistance = (coords1, coords2) => {
+    function toRad(x) {
+        return x * Math.PI / 180;
+    }
+    if (!coords1 || !coords2) return 0;
+
+    const lat1 = coords1.lat;
+    const lon1 = coords1.lng; // FIX: lon -> lng
+    const lat2 = coords2.lat;
+    const lon2 = coords2.lng; // FIX: lon -> lng
+
+    const R = 6371; // Earth radius in km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    
+    return R * c; // Distance in km
+};
+
 const createPlan = async (plan) => {
     const connection = await pool.getConnection();
     await connection.beginTransaction();
@@ -17,9 +42,27 @@ const createPlan = async (plan) => {
       await connection.query(routePlanQuery, [planId, driverId, vehicleId, date, region]);
       
       if (stops && stops.length > 0) {
-        // Prepare bulk insert for route_stops table, now including lat/lng
+        // Calculate distances before inserting
+        for (let i = 0; i < stops.length - 1; i++) {
+            const currentStop = stops[i];
+            const nextStop = stops[i + 1];
+            // FIX: Check for lat/lng directly on stop object, not inside .location
+            if (currentStop.lat != null && currentStop.lng != null && nextStop.lat != null && nextStop.lng != null) {
+                const coords1 = { lat: currentStop.lat, lng: currentStop.lng };
+                const coords2 = { lat: nextStop.lat, lng: nextStop.lng };
+                const distance = haversineDistance(coords1, coords2);
+                stops[i].distanceToNext = parseFloat(distance.toFixed(2));
+            } else {
+                stops[i].distanceToNext = null;
+            }
+        }
+        if (stops.length > 0) {
+            stops[stops.length - 1].distanceToNext = null;
+        }
+
+        // Prepare bulk insert for route_stops table
         const routeStopsQuery = `
-          INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, lat, lng, status, sequence)
+          INSERT INTO route_stops (id, routePlanId, orderId, storeId, storeName, address, lat, lng, status, sequence, distance_to_next_km)
           VALUES ?`;
         const routeStopsData = stops.map((stop, index) => [
           randomUUID(),
@@ -28,20 +71,26 @@ const createPlan = async (plan) => {
           stop.storeId,
           stop.storeName,
           stop.address,
-          stop.location.lat,
-          stop.location.lng,
+          stop.lat, // FIX: Use stop.lat directly
+          stop.lng, // FIX: Use stop.lng directly
           'Pending', // Default status for a new stop
-          index + 1  // Sequence number
+          index + 1,  // Sequence number
+          stop.distanceToNext
         ]);
         await connection.query(routeStopsQuery, [routeStopsData]);
 
         // Update the status of the orders included in this new route
         const orderIds = stops.map(stop => stop.orderId);
-        const placeholders = orderIds.map(() => '?').join(',');
-        const updateOrdersQuery = `
-          UPDATE orders SET status = 'Routed', assignedVehicleId = ? 
-          WHERE id IN (${placeholders})`;
-        await connection.query(updateOrdersQuery, [vehicleId, ...orderIds]);
+        if (orderIds.length > 0) {
+            const placeholders = orderIds.map(() => '?').join(',');
+            const updateOrdersQuery = `
+              UPDATE orders SET status = 'Routed', assignedVehicleId = ? 
+              WHERE id IN (${placeholders})`;
+            await connection.query(updateOrdersQuery, [vehicleId, ...orderIds]);
+        }
+
+        // FIX: Update vehicle status to Delivering. Using 1 as a guess for the enum/int value.
+        await connection.query('UPDATE vehicles SET status = ? WHERE id = ?', [1, vehicleId]);
       }
 
       await connection.commit();
@@ -121,6 +170,7 @@ const deletePendingPlansForVehicle = async (vehicleId, date) => {
 const getAll = async (filters = {}) => {
       let query = 'SELECT * FROM route_plans';
       const params = [];
+      const depotLocation = { lat: -7.8664161, lng: 110.1486773 }; // PDAM
 
       if (filters.date || filters.driverId || filters.vehicleId) {
           query += ' WHERE ';
@@ -162,15 +212,26 @@ const getAll = async (filters = {}) => {
           const { routePlanId, lat, lng, ...restOfStop } = stop;
           acc[stop.routePlanId].push({ 
               ...restOfStop,
+              distanceToNext: stop.distance_to_next_km, // Read from DB
               location: { lat, lng }
           });
           return acc;
       }, {});
 
-      return plans.map(plan => ({
-          ...plan,
-          stops: stopsByPlanId[plan.id] || [],
-      }));
+      return plans.map(plan => {
+          const planStops = stopsByPlanId[plan.id] || [];
+          let distanceFromDepot = null;
+          if (planStops.length > 0 && planStops[0].location) {
+              const distance = haversineDistance(depotLocation, planStops[0].location);
+              distanceFromDepot = parseFloat(distance.toFixed(2));
+          }
+
+          return {
+              ...plan,
+              stops: planStops,
+              distanceFromDepot: distanceFromDepot,
+          };
+      });
 };
 
 const getById = async (id) => {

@@ -2,6 +2,29 @@
 const pool = require('../config/db');
 const { randomUUID } = require('crypto');
 
+// Helper to calculate distance between two lat/lng points in KM
+const haversineDistance = (coords1, coords2) => {
+    function toRad(x) {
+        return x * Math.PI / 180;
+    }
+    if (!coords1 || !coords2) return 0;
+
+    const lat1 = coords1.lat;
+    const lon1 = coords1.lng;
+    const lat2 = coords2.lat;
+    const lon2 = coords2.lng;
+
+    const R = 6371; // Earth radius in km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    
+    return R * c; // Distance in km
+};
+
 const SalesVisitRouteModel = {
     create: async (planData) => {
         const connection = await pool.getConnection();
@@ -15,8 +38,24 @@ const SalesVisitRouteModel = {
             await connection.query(planQuery, [planId, salesPersonId, date]);
 
             if (stops && stops.length > 0) {
+                // Calculate distances before inserting
+                for (let i = 0; i < stops.length - 1; i++) {
+                    const currentStop = stops[i];
+                    const nextStop = stops[i + 1];
+                    if (currentStop.location && nextStop.location) {
+                        const distance = haversineDistance(currentStop.location, nextStop.location);
+                        stops[i].distanceToNext = parseFloat(distance.toFixed(2));
+                    } else {
+                        stops[i].distanceToNext = null;
+                    }
+                }
+                // Last stop has no next stop
+                if (stops.length > 0) {
+                    stops[stops.length - 1].distanceToNext = null;
+                }
+
                 const stopsQuery = `
-                    INSERT INTO sales_visit_route_stops (id, planId, visitId, storeId, storeName, address, purpose, sequence)
+                    INSERT INTO sales_visit_route_stops (id, planId, visitId, storeId, storeName, address, purpose, sequence, distance_to_next_km)
                     VALUES ?`;
                 const stopsData = stops.map((stop, index) => [
                     randomUUID(),
@@ -26,7 +65,8 @@ const SalesVisitRouteModel = {
                     stop.storeName,
                     stop.address,
                     stop.purpose,
-                    index + 1
+                    index + 1,
+                    stop.distanceToNext
                 ]);
                 await connection.query(stopsQuery, [stopsData]);
             }
@@ -47,6 +87,7 @@ const SalesVisitRouteModel = {
         if (plans.length === 0) return [];
         const planIds = plans.map(p => p.id);
         const placeholders = planIds.map(() => '?').join(',');
+        const depotLocation = { lat: -7.8664161, lng: 110.1486773 }; // PDAM
 
         const stopsQuery = `
             SELECT 
@@ -71,19 +112,30 @@ const SalesVisitRouteModel = {
                 storeName: stop.storeName,
                 address: stop.address,
                 purpose: stop.purpose,
-                sequence: stop.sequence, // <-- ADD THIS LINE
+                sequence: stop.sequence,
                 location: { lat: stop.lat, lng: stop.lng },
-                status: stop.status || 'Akan Datang', // Default status
+                status: stop.status || 'Akan Datang',
                 notes: stop.notes,
                 proofOfVisitImage: stop.proofOfVisitImage,
+                distanceToNext: stop.distance_to_next_km, // Read from DB
             });
             return acc;
         }, {});
 
-        return plans.map(plan => ({
-            ...plan,
-            stops: stopsByPlanId[plan.id] || [],
-        }));
+        return plans.map(plan => {
+            const planStops = stopsByPlanId[plan.id] || [];
+            let distanceFromDepot = null;
+            if (planStops.length > 0 && planStops[0].location) {
+                const distance = haversineDistance(depotLocation, planStops[0].location);
+                distanceFromDepot = parseFloat(distance.toFixed(2));
+            }
+
+            return {
+                ...plan,
+                stops: planStops,
+                distanceFromDepot: distanceFromDepot, // Jarak dari gudang ke titik pertama
+            };
+        });
     },
     
     getAll: async () => {

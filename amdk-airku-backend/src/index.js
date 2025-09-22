@@ -24,8 +24,23 @@ const app = express();
 app.disable('etag');
 
 // Middleware
+const allowedOrigins = [
+  'http://localhost:5173',                  // Alamat frontend lokal Anda
+  'https://ku-airku.vercel.app',              // Alamat Vercel Anda
+  'https://2b2b10f331a3.ngrok-free.app',      // Alamat ngrok Anda
+];
+
 app.use(cors({
-  origin: 'http://localhost:5173' // Ganti dengan origin frontend Anda jika berbeda
+  origin: function (origin, callback) {
+    // Izinkan permintaan tanpa origin (seperti dari Postman atau mobile apps)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  }
 }));
 // Tingkatkan batas ukuran payload menjadi 5MB untuk unggahan gambar
 app.use(express.json({ limit: '5mb' }));
