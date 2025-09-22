@@ -1,18 +1,19 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-const dbConfig = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+const dbUrl = new URL(process.env.DATABASE_URL);
+
+const pool = mysql.createPool({
+  host: dbUrl.hostname,
+  user: dbUrl.username,
+  password: dbUrl.password,
+  database: dbUrl.pathname.substring(1),
+  port: dbUrl.port,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // Return date/datetime columns as strings, not Date objects.
-  // This prevents timezone conversions by the driver.
   dateStrings: true
-};
+});
 
 const pool = mysql.createPool(dbConfig);
 
