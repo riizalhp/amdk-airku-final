@@ -1,9 +1,7 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-const dbUrl = new URL(process.env.DATABASE_URL);
-
-const dbConfig = {
+const pool = mysql.createPool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
@@ -13,8 +11,6 @@ const dbConfig = {
   connectionLimit: 10,
   queueLimit: 0,
   dateStrings: true
-};
+});
 
-const pool = mysql.createPool(dbConfig);
-// Export the promise-based pool for async/await
 module.exports = pool.promise();
