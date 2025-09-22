@@ -28,6 +28,7 @@ const allowedOrigins = [
   'http://localhost:5173',                  // Alamat frontend lokal Anda
   'https://ku-airku.vercel.app',              // Alamat Vercel Anda
   'https://2b2b10f331a3.ngrok-free.app',      // Alamat ngrok Anda
+  'amdk-airku-final-production-cdc3.up.railway.app'
 ];
 
 app.use(cors({
