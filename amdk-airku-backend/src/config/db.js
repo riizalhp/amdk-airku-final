@@ -15,7 +15,5 @@ const pool = mysql.createPool({
   dateStrings: true
 });
 
-const pool = mysql.createPool(dbConfig);
-
 // Export the promise-based pool for async/await
 module.exports = pool.promise();
